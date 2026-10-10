@@ -144,6 +144,39 @@ public:
         return last_label;
     }
 
+    // An actual branch is required: OpSelect after an invalid load/store is too late.
+    Id GuardRead(Id type, Id condition, auto&& emit) {
+        if (!Sirit::ValidId(condition)) {
+            return emit();
+        }
+        const Id before = last_label;
+        const Id body = OpLabel();
+        const Id merge = OpLabel();
+        OpSelectionMerge(merge, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(condition, body, merge);
+        AddLabel(body);
+        const Id result = emit();
+        const Id end = last_label;
+        OpBranch(merge);
+        AddLabel(merge);
+        return OpPhi(type, ConstantNull(type), before, result, end);
+    }
+
+    void GuardWrite(Id condition, auto&& emit) {
+        if (!Sirit::ValidId(condition)) {
+            emit();
+            return;
+        }
+        const Id body = OpLabel();
+        const Id merge = OpLabel();
+        OpSelectionMerge(merge, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(condition, body, merge);
+        AddLabel(body);
+        emit();
+        OpBranch(merge);
+        AddLabel(merge);
+    }
+
     Id EmitDwordMemoryRead(Id address, auto&& fallback) {
         const Id available_label = OpLabel();
         const Id fallback_label = OpLabel();
@@ -185,9 +218,11 @@ public:
         ASSERT(flatbuf_buffer.binding >= 0 && flatbuf_buffer.buffer_type == BufferType::Flatbuf);
         const auto [flatbuf_buffer_id, flatbuf_pointer_type] =
             flatbuf_buffer.aliases[u32(PointerType::U32)];
-        const auto ptr{
-            OpAccessChain(flatbuf_pointer_type, flatbuf_buffer_id, u32_zero_value, flatbuf_offset)};
-        return OpLoad(U32[1], ptr);
+        return GuardRead(U32[1], BufferAccessCondition(flatbuf_index, flatbuf_buffer_id,
+                                                     flatbuf_offset, flatbuf_offset), [&] {
+            return OpLoad(U32[1], OpAccessChain(flatbuf_pointer_type, flatbuf_buffer_id,
+                                               u32_zero_value, flatbuf_offset));
+        });
     }
 
     Info& info;
@@ -362,6 +397,51 @@ public:
         }
     };
 
+    Id ResourcePresent(u32 index) {
+        const auto [id, ptr] = buffers[presence_index].Alias(PointerType::U32);
+        return OpINotEqual(U1[1], OpLoad(U32[1], OpAccessChain(ptr, id,
+                           u32_zero_value, ConstU32(index))), u32_zero_value);
+    }
+
+    Id BufferAccessCondition(u32 handle, Id id, Id index, Id original) {
+        if (!profile.emulate_robustness) {
+            return {};
+        }
+        const Id length = OpArrayLength(U32[1], id, 0);
+        const Id in_range = OpULessThan(U1[1], index, length);
+        const Id no_wrap = OpUGreaterThanEqual(U1[1], index, original);
+        return OpLogicalAnd(U1[1], ResourcePresent(handle),
+                            OpLogicalAnd(U1[1], in_range, no_wrap));
+    }
+
+    // Read a valid element even for a rejected index, then select zero. This
+    // avoids a divergent branch per component and prevents speculative OOB
+    // loads. Empty typed arrays still need a guard: they have no safe element.
+    Id BoundedBufferRead(Id type, u32 handle, Id id, Id pointer_type,
+                         Id index, Id original) {
+        const auto read = [&](Id at) {
+            return OpLoad(type, OpAccessChain(pointer_type, id, u32_zero_value, at));
+        };
+        if (!profile.emulate_robustness) {
+            return read(index);
+        }
+        // Redirecting an invalid read into a writable buffer could race a write
+        // to element zero. Keep the original conditional read for those buffers.
+        if (!profile.bounded_buffer_reads || info.buffers[handle].is_written) {
+            return GuardRead(type, BufferAccessCondition(handle, id, index, original),
+                             [&] { return read(index); });
+        }
+        const Id length = OpArrayLength(U32[1], id, 0);
+        const Id nonempty = OpINotEqual(U1[1], length, u32_zero_value);
+        const Id valid = OpLogicalAnd(U1[1], ResourcePresent(handle),
+            OpLogicalAnd(U1[1], OpULessThan(U1[1], index, length),
+                         OpUGreaterThanEqual(U1[1], index, original)));
+        return GuardRead(type, nonempty, [&] {
+            const Id safe_index = OpSelect(U32[1], valid, index, u32_zero_value);
+            return OpSelect(type, valid, read(safe_index), ConstantNull(type));
+        });
+    }
+
     Bindings& binding;
     boost::container::small_vector<Id, 16> buf_type_ids;
     boost::container::small_vector<BufferDefinition, 16> buffers;
@@ -369,6 +449,7 @@ public:
     boost::container::small_vector<Id, 4> samplers;
     std::unordered_map<u32, Id> first_to_last_label_map;
 
+    size_t presence_index{};
     size_t flatbuf_index{};
     size_t bda_pagetable_index{};
     size_t fault_buffer_index{};

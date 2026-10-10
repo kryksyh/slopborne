@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <thread>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 #ifdef _WIN32
 #include <bit>
 #include <windows.h>
@@ -30,6 +33,13 @@ inline unsigned Available() {
 /// The calling thread only runs when cores are otherwise idle (lowest Windows priority).
 inline void MakeBackground() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
+}
+#elif defined(__APPLE__)
+inline unsigned Available() {
+    return std::max(1u, std::thread::hardware_concurrency());
+}
+inline void MakeBackground() {
+    pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
 }
 #else
 

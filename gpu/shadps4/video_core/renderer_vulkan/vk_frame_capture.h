@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport: frame analyzer. Creating the file named by BB_CAPTURE_TRIGGER records the next full
+// bbport: frame analyzer. Incrementing the number in BB_CAPTURE_SEQUENCE records the next full
 // frame: every render pass (targets, depth, draw count, shaders, sampled textures) and compute
 // dispatch, in order, plus the buffer that was presented. Input for placing a temporal
 // upscaler (scene color, depth, motion vectors, UI) in Bloodborne's frame.
+// BB_CAPTURE_AT records one numbered frame. The legacy BB_CAPTURE_TRIGGER consumes its file.
 
 #pragma once
 
@@ -33,6 +34,11 @@ public:
     static bool Active() {
         return state.load(std::memory_order_relaxed) != Idle;
     }
+    /// Optional diagnostic hash interval, read from BB_SKIP_FRAGMENT_FILE on each flip.
+    static bool SkipFragment(u64 hash) {
+        return hash != 0 && hash >= skip_fragment_low.load(std::memory_order_relaxed) &&
+               hash <= skip_fragment_high.load(std::memory_order_relaxed);
+    }
     /// GPU thread, at every draw/dispatch: starts or ends a recording at frame boundaries.
     static void Poll();
 
@@ -50,6 +56,8 @@ private:
     static inline std::atomic<u32> state{Idle};
     static inline std::atomic<u64> flips{0};
     static inline std::atomic<VAddr> last_presented{0};
+    static inline std::atomic<u64> skip_fragment_low{1};
+    static inline std::atomic<u64> skip_fragment_high{0};
 };
 
 } // namespace Vulkan

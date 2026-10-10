@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <mutex>
 
@@ -128,8 +129,40 @@ void Write(VAddr presented) {
 } // namespace
 
 void FrameCapture::OnFlip(VAddr presented_address) {
+    static const char* skip_path = std::getenv("BB_SKIP_FRAGMENT_FILE");
+    if (skip_path) {
+        u64 low = 1, high = 0;
+        std::ifstream input(skip_path);
+        if (!(input >> std::hex >> low >> high)) {
+            low = 1;
+            high = 0;
+        }
+        skip_fragment_low.store(low, std::memory_order_relaxed);
+        skip_fragment_high.store(high, std::memory_order_relaxed);
+    }
     last_presented.store(presented_address, std::memory_order_relaxed);
-    flips.fetch_add(1, std::memory_order_release);
+    const auto frame = flips.fetch_add(1, std::memory_order_release) + 1;
+    static const u64 capture_at = [] {
+        const char* value = std::getenv("BB_CAPTURE_AT");
+        return value ? std::strtoull(value, nullptr, 10) : 0;
+    }();
+    if (frame == capture_at && state.load(std::memory_order_relaxed) == Idle) {
+        state.store(Armed, std::memory_order_release);
+        std::printf("Frame capture: armed at frame %llu\n", static_cast<unsigned long long>(frame));
+    }
+    // A monotonically increasing request number allows repeated captures without removing
+    // a trigger file. Only acknowledge requests when a capture can actually be armed.
+    static const char* sequence_path = std::getenv("BB_CAPTURE_SEQUENCE");
+    static u64 last_sequence = 0;
+    if (sequence_path && state.load(std::memory_order_relaxed) == Idle) {
+        u64 sequence = 0;
+        if (std::ifstream(sequence_path) >> sequence; sequence > last_sequence) {
+            last_sequence = sequence;
+            state.store(Armed, std::memory_order_release);
+            std::printf("Frame capture: armed request %llu\n",
+                        static_cast<unsigned long long>(sequence));
+        }
+    }
     static const char* trigger = std::getenv("BB_CAPTURE_TRIGGER");
     if (trigger && state.load(std::memory_order_relaxed) == Idle &&
         std::filesystem::exists(trigger)) {

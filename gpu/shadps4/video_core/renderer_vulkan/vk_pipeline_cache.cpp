@@ -339,18 +339,27 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                    instance.GetDriverID() == vk::DriverId::eNvidiaProprietary;
         }(),
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
-                              instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
+                              instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp ||
+                              // Apple executes 32 lanes at a time; a PS4 wave64
+                              // shared-memory exchange needs workgroup ordering.
+                              instance.GetDriverID() == vk::DriverId::eMoltenvk,
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
+        .emulate_robustness = instance.EmulatesRobustness(),
+        .bounded_buffer_reads = [] {
+            const char* value = std::getenv("BB_BOUNDED_BUFFER_READS");
+            return value && value[0] == '1';
+        }(),
     };
-    WarmUp();
-
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
     ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
+    // Warm-up creates real Vulkan pipelines too. Give them the same driver cache
+    // as live compilation instead of compiling with a null cache and replacing it.
+    WarmUp();
 }
 
 PipelineCache::~PipelineCache() = default;
@@ -481,11 +490,16 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     const auto& regs = (*sel.regs);
     auto& key = sel.graphics_key;
 
-    const bool db_enabled = regs.depth_buffer.DepthValid() || regs.depth_buffer.StencilValid();
+    // Match Rasterizer::PrepareRenderState: valid addresses left in the registers
+    // do not imply an attachment when both depth and stencil tests are disabled.
+    // Metal requires pipeline formats to match the actual render attachments.
+    const bool db_enabled =
+        (regs.depth_control.depth_enable && regs.depth_buffer.DepthValid()) ||
+        (regs.depth_control.stencil_enable && regs.depth_buffer.StencilValid());
 
-    key.z_format = regs.depth_buffer.DepthValid() ? regs.depth_buffer.z_info.format
+    key.z_format = db_enabled && regs.depth_buffer.DepthValid() ? regs.depth_buffer.z_info.format
                                                   : AmdGpu::DepthBuffer::ZFormat::Invalid;
-    key.stencil_format = regs.depth_buffer.StencilValid()
+    key.stencil_format = db_enabled && regs.depth_buffer.StencilValid()
                              ? regs.depth_buffer.stencil_info.format
                              : AmdGpu::DepthBuffer::StencilFormat::Invalid;
     key.depth_clamp_enable = !regs.depth_render_override.disable_viewport_clamp;
@@ -684,7 +698,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         std::tie(sel.infos[stage_out_idx], sel.modules[stage_out_idx], fetch_shader_,
                  key.stage_hashes[stage_out_idx]) =
             GetProgram(sel, stage_in, stage_out, params, binding);
-        if (fetch_shader_) {
+        if (fetch_shader_ && !profile.emulate_robustness) {
             sel.fetch_shader = fetch_shader_;
         }
         return true;

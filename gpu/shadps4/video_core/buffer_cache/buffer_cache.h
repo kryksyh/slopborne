@@ -6,6 +6,7 @@
 #include "bbport_copy.h"
 
 #include <deque>
+#include <map>
 #include <boost/container/small_vector.hpp>
 
 #include "common/interval_set.h"
@@ -41,7 +42,7 @@ class BufferCache {
     // bbport: arena pages are 4 GiB unless the driver's buffer size limit is lower (AMD's
     // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
-    static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
+    static constexpr u64 MIN_ARENA_PAGE_BITS = 25;
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
@@ -109,10 +110,16 @@ public:
     /// Synchronizes all buffers needed for DMA.
     void SynchronizeDmaBuffers();
 
+    /// Repair bindings prepared before a committed arena was merged. Recorded commands
+    /// keep their old buffers alive; commands not yet recorded must use the new backing.
+    bool RefreshBinding(vk::Buffer& handle, u64& offset) const;
+    bool RefreshBinding(const Buffer*& buffer, u64& offset) const;
+
     /// Commits pending sparse buffer memory binds. Must be called before every scheduler submit.
     void SubmitPendingArenaBinds(Vulkan::SubmitInfo& info);
 
 private:
+    friend struct DenseArenaTest;
     struct ArenaBinds {
         const Buffer* arena;
         boost::container::small_vector<vk::SparseMemoryBind, 32> binds;
@@ -127,6 +134,7 @@ private:
     }
 
     const Buffer* GetArena(u64 first_block, u64 last_block);
+    const Buffer* GetDenseArena(u64 first_block, u64 last_block);
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
@@ -168,10 +176,12 @@ private:
     std::unique_ptr<Buffer> bda_pagetable_buffer;
 
     std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
+    bool sparse_buffers{};
     u64 arena_page_bits{MAX_ARENA_PAGE_BITS};
     u64 arena_page_size{u64{1} << MAX_ARENA_PAGE_BITS};
     u64 num_arena_pages{u64{1} << (ADDRESS_SPACE_BITS - MAX_ARENA_PAGE_BITS)};
     std::deque<Buffer> arenas;
+    std::map<vk::Buffer, const Buffer*> retired_dense_arenas;
     std::vector<ArenaBinds> pending_binds;
     Vulkan::Semaphore memory_semaphore;
 

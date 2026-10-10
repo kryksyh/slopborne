@@ -60,6 +60,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
       memory_semaphore{instance} {
+    sparse_buffers = instance.SupportsSparseBuffers();
+    if (!sparse_buffers) {
+        arena_page_bits = MIN_ARENA_PAGE_BITS;
+        LOG_WARNING(Render_Vulkan, "Sparse buffers unavailable; using committed 32 MiB arenas");
+    }
     while (arena_page_bits > MIN_ARENA_PAGE_BITS &&
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
@@ -71,8 +76,9 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                  arena_page_size >> 20, instance.GetMaxBufferSize() >> 20);
     }
     const vk::BufferCreateInfo probe_ci = {
-        .flags =
-            vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency,
+        .flags = sparse_buffers ? vk::BufferCreateFlagBits::eSparseBinding |
+                                      vk::BufferCreateFlagBits::eSparseResidency
+                                : vk::BufferCreateFlags{},
         .size = arena_page_size,
         .usage = ARENA_USAGE,
         .sharingMode = vk::SharingMode::eExclusive,
@@ -394,14 +400,107 @@ void BufferCache::ProcessFaultBuffer() {
 
 void BufferCache::SynchronizeDmaBuffers() {
     for (const auto& range : resident_ranges) {
-        const u64 page = range.start >> (arena_page_bits - block_shift);
-        const VAddr device_addr = range.start << block_shift;
-        const u64 size = (range.end - range.start) << block_shift;
-        SynchronizeMemory(address_space[page], device_addr, size, false, false);
+        VAddr address = range.start << block_shift;
+        const VAddr end = range.end << block_shift;
+        while (address < end) {
+            const auto* arena = address_space[address >> arena_page_bits];
+            const u64 size = std::min(end, arena->cpu_addr + arena->size_bytes) - address;
+            SynchronizeMemory(arena, address, size, false, false);
+            address += size;
+        }
     }
 }
 
+const Buffer* BufferCache::GetDenseArena(u64 first_block, u64 last_block) {
+    u64 first_page = first_block >> blocks_per_arena_page_shift;
+    u64 end_page = (last_block >> blocks_per_arena_page_shift) + 1;
+    ASSERT_MSG(end_page <= num_arena_pages, "Buffer address exceeds guest address space");
+    const auto* existing = address_space[first_page];
+    if (existing && (last_block << block_shift) < existing->cpu_addr + existing->size_bytes) {
+        return existing;
+    }
+    // Include whole overlapping arenas, including those extending beyond the request.
+    // Never split an existing binding between two ordinary VkBuffers.
+    if (existing) {
+        first_page = existing->cpu_addr >> arena_page_bits;
+    }
+    std::vector<const Buffer*> previous;
+    for (u64 page = first_page; page < end_page; ++page) {
+        if (const auto* old = address_space[page]) {
+            if (previous.empty() || previous.back() != old) {
+                previous.push_back(old);
+            }
+            end_page = std::max<u64>(end_page,
+                               (old->cpu_addr + old->size_bytes) >> arena_page_bits);
+        }
+    }
+    const VAddr base = first_page << arena_page_bits;
+    const u64 bytes = (end_page - first_page) << arena_page_bits;
+    ASSERT_MSG(bytes <= instance.GetMaxBufferSize(),
+               "Committed arena {} bytes exceeds device buffer limit", bytes);
+    const auto* arena = &arenas.emplace_back(instance, base, bytes, MemoryType::DeviceLocal);
+    runtime.FillBuffer(arena, 0, bytes, 0);
+    for (const auto* old : previous) {
+        const vk::BufferCopy copy{0, old->cpu_addr - base, old->size_bytes};
+        runtime.CopyBuffer(old, arena, std::span{&copy, 1});
+        retired_dense_arenas.emplace(old->Handle(), old);
+    }
+    for (u64 page = first_page; page < end_page; ++page) {
+        address_space[page] = arena;
+    }
+    if (!previous.empty()) {
+        // Existing resident blocks must also point at the new backing. Leave gaps
+        // unmapped so shader DMA faults still populate them through EnsureResident.
+        const u64 begin = base >> block_shift;
+        const u64 count = bytes >> block_shift;
+        const auto staging = staging_pool.Request(count * sizeof(vk::DeviceAddress),
+                                                  MemoryType::HostUncached);
+        auto* addresses = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+        std::fill_n(addresses, count, vk::DeviceAddress{});
+        resident_ranges.ForEachInRange(begin, begin + count, [&](const Backing& backing) {
+            for (u64 block = std::max(begin, backing.start);
+                 block < std::min(begin + count, backing.end); ++block) {
+                addresses[block - begin] = arena->BufferDeviceAddress() +
+                                           ((block - begin) << block_shift);
+            }
+        });
+        staging.Flush();
+        const vk::BufferCopy copy{staging.offset, begin * sizeof(vk::DeviceAddress),
+                                  count * sizeof(vk::DeviceAddress)};
+        runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), std::span{&copy, 1});
+        runtime.FlushBarriers();
+        LOG_INFO(Render_Vulkan, "Merged {} committed arenas at {:#x}, {} MiB",
+                 previous.size(), base, bytes >> 20);
+    }
+    return arena;
+}
+
+bool BufferCache::RefreshBinding(vk::Buffer& handle, u64& offset) const {
+    const auto it = retired_dense_arenas.find(handle);
+    if (it == retired_dense_arenas.end()) {
+        return false;
+    }
+    const VAddr address = it->second->cpu_addr + offset;
+    const auto* current = address_space[address >> arena_page_bits];
+    handle = current->Handle();
+    offset = current->Offset(address);
+    return true;
+}
+
+bool BufferCache::RefreshBinding(const Buffer*& buffer, u64& offset) const {
+    if (!retired_dense_arenas.contains(buffer->Handle())) {
+        return false;
+    }
+    const VAddr address = buffer->cpu_addr + offset;
+    buffer = address_space[address >> arena_page_bits];
+    offset = buffer->Offset(address);
+    return true;
+}
+
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
+    if (!sparse_buffers) {
+        return GetDenseArena(first_block, last_block);
+    }
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
     ASSERT_MSG(last_page - first_page <= 1,
@@ -472,14 +571,15 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         .allocationSize = resident_blocks << block_shift,
         .memoryTypeIndex = arena_memory_type_index,
     };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    const auto device_memory = sparse_buffers
+        ? Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info)) : vk::DeviceMemory{};
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
 
     u64 memory_offset{};
-    ArenaBinds* binds = BindsForArena(arena);
+    ArenaBinds* binds = sparse_buffers ? BindsForArena(arena) : nullptr;
     auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
     u64 offset = staging.offset;
     for (const auto& range : bind_ranges) {
@@ -492,12 +592,15 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
         LOG_INFO(Render, "Making range start={}, end={} resident", backing.start, backing.end);
 
-        const auto& bind = binds->binds.emplace_back(vk::SparseMemoryBind{
+        const vk::SparseMemoryBind bind{
             .resourceOffset = (range.start << block_shift) - arena->cpu_addr,
             .size = (range.end - range.start) << block_shift,
             .memory = device_memory,
             .memoryOffset = memory_offset,
-        });
+        };
+        if (binds) {
+            binds->binds.push_back(bind);
+        }
         memory_offset += bind.size;
 
         for (u32 block = 0; block < bind.size; block += block_size) {

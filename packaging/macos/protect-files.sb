@@ -1,0 +1,8 @@
+(version 1)
+(allow default)
+; Experimental launches must never delete files, including on preparation failure.
+(deny file-write-unlink)
+; The source dump and ongoing downloads are strictly read-only for this process
+; and all children. Generated images, settings and saves live in BB_DATA_DIR.
+(deny file-write* (subpath (param "GAME_DIR")))
+(deny file-write* (subpath (param "DOWNLOAD_DIR")))

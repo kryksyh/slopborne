@@ -9,6 +9,7 @@ void runtime_restart(void) { abort(); }
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include "macos_test_barrier.h"
 #include <stdatomic.h>
 #include <time.h>
 

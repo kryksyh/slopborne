@@ -5,6 +5,7 @@
 #include "common/path_util.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
+#include "shader_recompiler/frontend/decode.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -1138,26 +1139,26 @@ template void Translator::SetDstPk<IR::F32, false>(const InstOperand& operand,
 void Translator::EmitFetch(const GcnInst& inst) {
     const auto code_sgpr_base = inst.src[0].code;
 
-#if 0
-    // Translate fetch shader inline using regular buffer bindings; useful for debugging.
-    const auto* code = GetFetchShaderCode(info, code_sgpr_base);
-    GcnCodeSlice slice(code, code + std::numeric_limits<u32>::max());
-    GcnDecodeContext decoder;
-
-    // Decode and save instructions
-    while (!slice.atEnd()) {
-        const auto sub_inst = decoder.decodeInstruction(slice);
-        if (sub_inst.opcode == Opcode::S_SETPC_B64) {
-            // Assume we're swapping back to the main shader.
-            break;
-        }
-        TranslateInstruction(sub_inst);
-    }
-    return;
-#endif
-
     info.has_fetch_shader = true;
     info.fetch_shader_sgpr_base = code_sgpr_base;
+
+    if (profile.emulate_robustness) {
+        // Preserve fetch metadata for shader specialization, but pull attributes
+        // through checked storage buffers instead of fixed-function vertex input.
+        const auto parsed = ParseFetchShader(info);
+        ASSERT(parsed.has_value());
+        const auto* code = GetFetchShaderCode(info, code_sgpr_base);
+        GcnCodeSlice slice(code, code + parsed->size / sizeof(u32));
+        GcnDecodeContext decoder;
+        while (!slice.atEnd()) {
+            const auto sub_inst = decoder.decodeInstruction(slice);
+            if (sub_inst.opcode == Opcode::S_SETPC_B64) {
+                break;
+            }
+            TranslateInstruction(sub_inst);
+        }
+        return;
+    }
 
     fetch_data = ParseFetchShader(info);
     ASSERT(fetch_data.has_value());

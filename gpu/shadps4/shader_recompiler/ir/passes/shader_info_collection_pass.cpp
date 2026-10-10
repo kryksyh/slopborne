@@ -194,6 +194,13 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
         });
         LOG_ERROR(Render, "Enabling DMA for shader {:#x}", info.pgm_hash);
     }
+    if (profile.emulate_robustness) {
+        ASSERT_MSG(info.buffers.size() < NUM_BUFFERS, "No descriptor slot for resource-presence fallback");
+        info.buffers.push_back({
+            .used_types = IR::Type::U32,
+            .buffer_type = BufferType::ResourcePresence,
+        });
+    }
 }
 
 } // namespace Shader::Optimization

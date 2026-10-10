@@ -265,12 +265,23 @@ bool Instance::CreateDevice() {
                "Required Vulkan extension unavailable: {}", VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 
     const auto robustness2_features = feature_chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
-    ASSERT_MSG(robustness2_features.robustBufferAccess2,
+    emulate_robustness = !robustness2_features.robustBufferAccess2 || !robustness2_features.nullDescriptor;
+    // Allow forcing either path for regression tests and driver comparisons.
+    if (const char* env = std::getenv("BB_EMULATE_ROBUSTNESS")) {
+        emulate_robustness = env[0] == '1';
+    }
+    if (emulate_robustness) {
+        LOG_WARNING(Render_Vulkan, "Using shader bounds checks, vertex pulling, and null-resource emulation");
+    }
+    ASSERT_MSG(robustness2_features.robustBufferAccess2 || emulate_robustness,
                "Required Vulkan feature unavailable: robustBufferAccess2");
     ASSERT_MSG(robustness2_features.robustImageAccess2,
                "Required Vulkan feature unavailable: robustImageAccess2");
-    ASSERT_MSG(robustness2_features.nullDescriptor,
+    ASSERT_MSG(robustness2_features.nullDescriptor || emulate_robustness,
                "Required Vulkan feature unavailable: nullDescriptor");
+
+    // Required when advertised by a portability driver such as MoltenVK.
+    add_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
 
     // Optional
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
@@ -501,9 +512,9 @@ bool Instance::CreateDevice() {
             .depthClipEnable = true,
         },
         vk::PhysicalDeviceRobustness2FeaturesEXT{
-            .robustBufferAccess2 = true,
+            .robustBufferAccess2 = emulate_robustness ? false : robustness2_features.robustBufferAccess2,
             .robustImageAccess2 = true,
-            .nullDescriptor = true,
+            .nullDescriptor = emulate_robustness ? false : robustness2_features.nullDescriptor,
         },
         vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT{
             .vertexInputDynamicState = true,

@@ -29,6 +29,8 @@ public:
     explicit Instance(s32 physical_device_index, bool enable_validation);
     ~Instance();
 
+    bool EmulatesRobustness() const { return emulate_robustness; }
+
     /// Returns a formatted string for the driver version
     std::string GetDriverVersionName();
 
@@ -56,6 +58,9 @@ public:
     /// Largest VkBuffer the driver allows (2 GiB on AMD's Windows driver).
     u64 GetMaxBufferSize() const {
         return vk13_props.maxBufferSize;
+    }
+    bool SupportsSparseBuffers() const {
+        return features.sparseBinding && features.sparseResidencyBuffer;
     }
 
     vk::PhysicalDevice GetPhysicalDevice() const {
@@ -494,6 +499,7 @@ public:
     [[nodiscard]] bool IsFormatSupported(vk::Format format, vk::FormatFeatureFlags2 flags) const;
 
 private:
+    bool emulate_robustness = false;
     Instance(const Frontend::WindowSystemInfo&, s32, bool, bool);
     /// Creates the logical device opportunistically enabling extensions
     bool CreateDevice();

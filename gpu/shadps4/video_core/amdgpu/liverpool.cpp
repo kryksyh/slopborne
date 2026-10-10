@@ -104,7 +104,7 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
         BbStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
@@ -112,6 +112,10 @@ void Liverpool::Process(std::stop_token stoken) {
     gpu_id = std::this_thread::get_id();
 #if defined(__linux__) || defined(_WIN32)
     gpu_tid = gettid();
+#elif defined(__APPLE__)
+    uint64_t thread_id = 0;
+    pthread_threadid_np(nullptr, &thread_id);
+    gpu_tid = static_cast<u32>(thread_id);
 #endif
 
     while (!stoken.stop_requested()) {
@@ -408,6 +412,9 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             UNREACHABLE_MSG("Invalid PM4 type {}", type);
         }
 
+        // A write or a resumed child can release this command memory to the guest.
+        // Keep the cursor advance locally, before executing any packet side effects.
+        const u32 packet_words = header->type3.NumWords() + 1;
         const PM4ItOpcode opcode = header->type3.opcode;
         const auto* it_body = reinterpret_cast<const u32*>(header) + 1;
         switch (opcode) {
@@ -459,7 +466,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             UNREACHABLE_MSG("Unknown PM4 type 3 opcode {:#x} with count {}",
                             static_cast<u32>(opcode), count);
         }
-        ccb = NextPacket(ccb, header->type3.NumWords() + 1);
+        ccb = NextPacket(ccb, packet_words);
     }
 
     FIBER_EXIT;
@@ -750,6 +757,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
+            ASSERT_MSG(count + 1 <= dcb.size(),
+                       "Truncated PM4 packet at {:#x}: opcode {:#x}, {} words, {} remaining",
+                       reinterpret_cast<uintptr_t>(header), u32(opcode), count + 1, dcb.size());
             ApplyGraphicsRegisterPacket(regs, header, gfx_reg_checksum, &pipe_dirty);
             // DmaData to 0x3022C does nothing here (skipped below): no need to wait.
             if (rasterizer && !PipelinedOpcode(opcode) &&
@@ -1127,7 +1137,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::EventWriteEos: {
-                const auto* event_eos = reinterpret_cast<const PM4CmdEventWriteEos*>(header);
+                const auto packet = *reinterpret_cast<const PM4CmdEventWriteEos*>(header);
+                const auto* event_eos = &packet;
                 if (rasterizer &&
                     rasterizer->RunInOrder(&RunEventWriteEos, event_eos, sizeof(*event_eos))) {
                     NotePendingFences(*event_eos);
@@ -1135,7 +1146,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::EventWriteEop: {
-                const auto* event_eop = reinterpret_cast<const PM4CmdEventWriteEop*>(header);
+                const auto packet = *reinterpret_cast<const PM4CmdEventWriteEop*>(header);
+                const auto* event_eop = &packet;
                 if (rasterizer) {
                     if (rasterizer->RunInOrder(&RunEventWriteEop, event_eop, sizeof(*event_eop))) {
                         NotePendingFences(*event_eop);
@@ -1146,7 +1158,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::DmaData: {
-                const auto* dma_data = reinterpret_cast<const PM4DmaData*>(header);
+                const auto packet = *reinterpret_cast<const PM4DmaData*>(header);
+                const auto* dma_data = &packet;
                 if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                     break;
                 }
@@ -1160,7 +1173,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::WriteData: {
-                const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(header);
+                // RunInOrder may publish the write before returning. Pending-write
+                // bookkeeping must not read command memory the guest can now reuse.
+                const boost::container::small_vector<u32, 16> packet(dcb.begin(),
+                                                                     dcb.begin() + count + 1);
+                const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(packet.data());
                 ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
                 ASSERT(!write_data->wr_one_addr.Value());
                 if (rasterizer) {
@@ -1168,7 +1185,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     BbWriteLog::NoteIntent(write_data->Address<u64>(), write_data->data,
                                            (count - 2) * sizeof(u32),
                                            BbWriteLog::WriteDataIntent);
-                    if (rasterizer->RunInOrder(&RunWriteData, header, (count + 1) * sizeof(u32),
+                    if (rasterizer->RunInOrder(&RunWriteData, packet.data(), (count + 1) * sizeof(u32),
                                                BbToggle::PipelinedMemoryWrites)) {
                         NotePendingWrite(*write_data, (count - 2) * sizeof(u32));
                         rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(),
@@ -1301,7 +1318,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto skip = *cond_exec->Address() == false;
                 if (skip) {
                     dcb = NextPacket(dcb,
-                                     header->type3.NumWords() + 1 + cond_exec->exec_count.Value());
+                                     count + 1 + cond_exec->exec_count.Value());
                     continue;
                 }
                 break;
@@ -1310,7 +1327,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 UNREACHABLE_MSG("Unknown PM4 type 3 opcode {:#x} with count {}",
                                 static_cast<u32>(opcode), count);
             }
-            dcb = NextPacket(dcb, header->type3.NumWords() + 1);
+            // Fence writes and nested command buffers can let the guest recycle
+            // this packet. Never reread its header after executing it.
+            dcb = NextPacket(dcb, count + 1);
             break;
         }
     }
@@ -1330,7 +1349,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     }
     if (seq != NoSeq && BbStats::enabled) {
         BbStats::submissions.fetch_add(1, std::memory_order_relaxed);
-#ifndef _WIN32 // bbport: per-thread rusage statistics are Linux-only
+#if defined(__linux__) // per-thread rusage statistics
         if (rusage usage{}; getrusage(RUSAGE_THREAD, &usage) == 0) {
             BbStats::gpu_user_us.store(u64(usage.ru_utime.tv_sec) * 1000000 + usage.ru_utime.tv_usec,
                                        std::memory_order_relaxed);

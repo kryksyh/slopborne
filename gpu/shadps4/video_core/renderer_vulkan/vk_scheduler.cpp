@@ -425,7 +425,10 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
         vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        // Presentation consumes the completed frame in a transfer blit, before
+        // color attachment output. Waiting only at color output permits that
+        // transfer to read an image whose rendering has not completed.
+        vk::PipelineStageFlagBits::eAllCommands,
     };
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {

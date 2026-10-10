@@ -99,6 +99,10 @@ Id EmitContext::Def(const IR::Value& value) {
         return Id{};
     case IR::Type::U1:
         return value.U1() ? true_value : false_value;
+    case IR::Type::U8:
+        return Constant(U8, u32(value.U8()));
+    case IR::Type::U16:
+        return Constant(U16, u32(value.U16()));
     case IR::Type::U32:
         return ConstU32(value.U32());
     case IR::Type::U64:
@@ -217,12 +221,8 @@ Id EmitContext::GetBufferSize(const u32 sharp_idx) {
     // Can this be done with memory access? Like we do now with ReadConst
     const auto& srt_flatbuf = buffers[flatbuf_index];
     ASSERT(srt_flatbuf.buffer_type == BufferType::Flatbuf);
-    const auto [id, pointer_type] = srt_flatbuf.Alias(PointerType::U32);
-
-    const auto rsrc1{
-        OpLoad(U32[1], OpAccessChain(pointer_type, id, u32_zero_value, ConstU32(sharp_idx + 1)))};
-    const auto rsrc2{
-        OpLoad(U32[1], OpAccessChain(pointer_type, id, u32_zero_value, ConstU32(sharp_idx + 2)))};
+    const auto rsrc1 = EmitFlatbufferLoad(ConstU32(sharp_idx + 1));
+    const auto rsrc2 = EmitFlatbufferLoad(ConstU32(sharp_idx + 2));
 
     const auto stride{OpBitFieldUExtract(U32[1], rsrc1, ConstU32(16u), ConstU32(14u))};
     const auto num_records{rsrc2};
@@ -260,7 +260,7 @@ void EmitContext::DefineBufferProperties() {
             Name(buf_word_offset, fmt::format("buf{}_word_off", binding));
             buffer.Offset(PointerSize::B16) = buf_word_offset;
         }
-        if (True(desc.used_types & IR::Type::U32)) {
+        if (True(desc.used_types & (IR::Type::U32 | IR::Type::F32))) {
             const Id buf_dword_offset{OpShiftRightLogical(U32[1], buf_offset, ConstU32(2U))};
             Name(buf_dword_offset, fmt::format("buf{}_dword_off", binding));
             buffer.Offset(PointerSize::B32) = buf_dword_offset;
@@ -333,7 +333,7 @@ void EmitContext::DefineInputs() {
         }
 
         const auto fetch_shader = Gcn::ParseFetchShader(info);
-        if (!fetch_shader) {
+        if (!fetch_shader || profile.emulate_robustness) {
             break;
         }
         for (const auto& attrib : fetch_shader->attributes) {
@@ -873,7 +873,9 @@ void EmitContext::DefineBuffers() {
             desc.buffer_type == BufferType::SharedMemory || buf_sharp.mtype == 3;
 
         // Set indexes for special buffers.
-        if (desc.buffer_type == BufferType::Flatbuf) {
+        if (desc.buffer_type == BufferType::ResourcePresence) {
+            presence_index = buffers.size();
+        } else if (desc.buffer_type == BufferType::Flatbuf) {
             flatbuf_index = buffers.size();
         } else if (desc.buffer_type == BufferType::BdaPagetable) {
             bda_pagetable_index = buffers.size();
@@ -1226,6 +1228,24 @@ Id EmitContext::DefineGetBdaPointer() {
     const auto page32{OpUConvert(U32[1], page)};
     const auto& bda_buffer{buffers[bda_pagetable_index]};
     const auto [bda_buffer_id, bda_pointer_type] = bda_buffer.Alias(PointerType::U64);
+    const auto& fault_buffer{buffers[fault_buffer_index]};
+    const auto [fault_buffer_id, fault_pointer_type] = fault_buffer.Alias(PointerType::U32);
+    const auto page_div32{OpShiftRightLogical(U32[1], page32, ConstU32(5U))};
+    if (profile.emulate_robustness) {
+        // Validate the 64-bit page before narrowing: an invalid guest address must
+        // not wrap into a valid page or access either internal buffer out of bounds.
+        const auto page_count{OpUConvert(U64, OpArrayLength(U32[1], bda_buffer_id, 0))};
+        const auto fault_count{OpArrayLength(U32[1], fault_buffer_id, 0)};
+        const auto valid{OpLogicalAnd(U1[1], OpULessThan(U1[1], page, page_count),
+                                     OpULessThan(U1[1], page_div32, fault_count))};
+        const auto valid_label{OpLabel()};
+        const auto invalid_label{OpLabel()};
+        OpSelectionMerge(valid_label, spv::SelectionControlMask::MaskNone);
+        OpBranchConditional(valid, valid_label, invalid_label);
+        AddLabel(invalid_label);
+        OpReturnValue(u64_zero_value);
+        AddLabel(valid_label);
+    }
     const auto bda_ptr{OpAccessChain(bda_pointer_type, bda_buffer_id, u32_zero_value, page32)};
     const auto bda{OpLoad(U64, bda_ptr)};
 
@@ -1236,9 +1256,6 @@ Id EmitContext::DefineGetBdaPointer() {
 
     // First time acces, mark as fault
     AddLabel(fault_label);
-    const auto& fault_buffer{buffers[fault_buffer_index]};
-    const auto [fault_buffer_id, fault_pointer_type] = fault_buffer.Alias(PointerType::U32);
-    const auto page_div32{OpShiftRightLogical(U32[1], page32, ConstU32(5U))};
     const auto page_mod32{OpBitwiseAnd(U32[1], page32, ConstU32(31U))};
     const auto page_mask{OpShiftLeftLogical(U32[1], u32_one_value, page_mod32)};
     const auto fault_ptr{

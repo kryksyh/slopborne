@@ -72,7 +72,11 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         .size = sizeof(Shader::PushData),
     };
 
-    uses_push_descriptors = binding < instance.MaxPushDescriptors();
+    // MoltenVK 1.4.2's push-descriptor path leaves the gamma compute output
+    // empty with checked-buffer shaders. Allocated sets restore the lookup
+    // texture and final display output. Keep the workaround driver-specific.
+    uses_push_descriptors = binding < instance.MaxPushDescriptors() &&
+                           instance.GetDriverID() != vk::DriverId::eMoltenvk;
     const auto flags = uses_push_descriptors
                            ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
                            : vk::DescriptorSetLayoutCreateFlagBits{};

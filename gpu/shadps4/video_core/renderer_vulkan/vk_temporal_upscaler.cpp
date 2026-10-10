@@ -1889,13 +1889,20 @@ bool TemporalUpscaler::RedirectSampled(VideoCore::ImageId image,
     return true;
 }
 
-bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
+bool TemporalUpscaler::DisplayOverride(VAddr address, vk::Format view_format, Display& display) {
     std::scoped_lock lock{display_mutex};
     const auto it = displays.find(address);
     if (it == displays.end() || !it->second.valid) {
         return false;
     }
-    display = {vk::Image(it->second.image), it->second.format, it->second.width, it->second.height};
+    auto& image = it->second;
+    // Keep the presentation view with its image. Recreating/deleting it every
+    // flip can leave Metal's encoded descriptor state referencing a retired view.
+    const vk::ComponentMapping mapping{vk::ComponentSwizzle::eIdentity,
+                                       vk::ComponentSwizzle::eIdentity,
+                                       vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eOne};
+    display = {vk::Image(image.image), image.format, image.width, image.height,
+               Mirror(vk::Image(image.image), image.views, view_format, mapping)};
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // BB_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
     static const char* dump = std::getenv("BB_PRESENT_DUMP_TRIGGER");

@@ -522,7 +522,9 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
             });
         }
     }
-    uses_push_descriptors = binding < instance.MaxPushDescriptors();
+    // Use the same MoltenVK descriptor workaround as compute pipelines.
+    uses_push_descriptors = binding < instance.MaxPushDescriptors() &&
+                           instance.GetDriverID() != vk::DriverId::eMoltenvk;
     const auto flags = uses_push_descriptors
                            ? vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR
                            : vk::DescriptorSetLayoutCreateFlagBits{};

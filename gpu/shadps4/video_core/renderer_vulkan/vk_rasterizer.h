@@ -252,6 +252,16 @@ private:
                       Shader::Backend::Bindings& binding, u32& write_index, bool& barrier,
                       bool on_helper = false);
     bool BindResources(const Pipeline* pipeline);
+    void PatchNullResources(const Shader::Info& stage, u32 first_write);
+    vk::ImageView NullImageView(const Shader::ImageResource& desc, const Shader::Info& stage);
+    struct NullImage {
+        AmdGpu::ImageType type;
+        vk::Format format;
+        bool storage;
+        VideoCore::UniqueImage image;
+        vk::UniqueImageView view;
+    };
+    std::vector<std::unique_ptr<NullImage>> null_images;
     void BindSamplers(const Shader::Info& stage, const PreparedStage* prepared,
                       Shader::Backend::Bindings& binding, u32& write_index);
     /// bbport: a stage's resolved textures remembered by its prepared T# hashes
@@ -305,6 +315,7 @@ private:
     void EmitIndexBuffer();
 
     void ResetBindings(bool is_compute);
+    void RefreshBufferBindings();
 
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);

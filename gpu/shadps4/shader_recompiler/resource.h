@@ -73,6 +73,7 @@ enum class BufferType : u8 {
     GdsBuffer,
     SharedMemory,
     ClipPlanes,
+    ResourcePresence, // macOS fallback: buffer and image validity for this draw
 };
 
 struct BufferResource {

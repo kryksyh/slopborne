@@ -13,6 +13,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <time.h>
+#include <errno.h>
 #include <SDL3/SDL.h>
 
 #define PORTS 25
@@ -55,6 +56,12 @@ static void sleep_until(uint64_t deadline) {
 #ifdef _WIN32
     /* winpthreads' clock_nanosleep only takes CLOCK_REALTIME (EINVAL otherwise). */
     for (uint64_t now=now_ns(); now<deadline; now=now_ns()) compat_sleep_ns(deadline-now);
+#elif defined(__APPLE__)
+    for (uint64_t now=now_ns(); now<deadline; now=now_ns()) {
+        uint64_t ns=deadline-now;
+        struct timespec t={(time_t)(ns/1000000000u),(long)(ns%1000000000u)};
+        while (nanosleep(&t,&t) && errno==EINTR) {}
+    }
 #else
     struct timespec t={(time_t)(deadline/1000000000u),(long)(deadline%1000000000u)};
     while (clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&t,NULL)) {}

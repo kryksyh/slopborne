@@ -38,6 +38,9 @@ struct VertexAttribute {
 
     constexpr AmdGpu::Buffer GetSharp(const Shader::Info& info) const noexcept {
         auto buffer = info.ReadUdReg<AmdGpu::Buffer>(sgpr_base, dword_offset);
+        if (!buffer) {
+            return buffer;
+        }
         buffer.base_address += inst_offset;
         if (data_format) {
             buffer.data_format = data_format;

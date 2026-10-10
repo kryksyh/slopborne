@@ -18,9 +18,11 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <sys/syscall.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
+#include <sys/syscall.h>
 #include <asm/prctl.h>
+#endif
 #endif
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
 #define ATTR_MAGIC UINT32_C(0x41545452)
@@ -82,6 +84,28 @@ static void set_gs(void *base) {
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
+#elif defined(__APPLE__)
+/* Darwin owns GS. Its x86-64 TSD base points at an array of pthread key values;
+ * keep the guest TCB in an allocated key rather than changing the host GS base.
+ * Validate the direct-load ABI on every attached thread before running guest code. */
+static pthread_key_t tls_key;
+static pthread_once_t tls_once=PTHREAD_ONCE_INIT;
+static void make_tls_key(void) {
+    int e=pthread_key_create(&tls_key,NULL);
+    if (e) { fprintf(stderr,"STOP: pthread_key_create: %d\n",e); exit(21); }
+}
+uint32_t runtime_thread_tcb_offset(void) {
+    pthread_once(&tls_once,make_tls_key);
+    return (uint32_t)(tls_key*sizeof(void *));
+}
+static void set_gs(void *base) {
+    uintptr_t offset=runtime_thread_tcb_offset();
+    int e=pthread_setspecific(tls_key,base);
+    void *actual;
+    __asm__ volatile("movq %%gs:(%1), %0" : "=r"(actual) : "r"(offset));
+    if (e || actual!=base) { fputs("STOP: unsupported Darwin x86-64 TSD layout\n",stderr); exit(21); }
+}
+#define tls_block_alloc(size) runtime_low_map(size,PROT_READ|PROT_WRITE)
 #else
 static void set_gs(void *base) {
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
@@ -106,7 +130,15 @@ static void attach(GuestThread *t) {
     current=t;
 }
 static GuestThread *new_thread(void) {
+#ifdef __APPLE__
+    /* Bloodborne packs the ScePthread lock owner into 40 bits, then compares
+     * it to the full thread_self() result. Darwin malloc addresses can exceed
+     * that range and cause a thread to deadlock on its own lock. These records
+     * already live for the process lifetime, like their guest TLS mappings. */
+    GuestThread *t=runtime_low_map(sizeof(*t),PROT_READ|PROT_WRITE);
+#else
     GuestThread *t=calloc(1,sizeof(*t));
+#endif
     if (!t) return NULL;
     t->attr=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.stack=DEFAULT_STACK,.affinity=0x7f};
     return t;
@@ -243,7 +275,11 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
 static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
+#ifdef __APPLE__
+    pthread_setname_np(host);
+#else
     pthread_setname_np(pthread_self(),host);
+#endif
 }
 #ifdef _WIN32
 #define exit_setjmp(t) bb_setjmp((t)->exit_jump)
@@ -408,4 +444,3 @@ void runtime_thread_report(void) {
     printf("Runtime: guest threads created=%zu, exited=%zu, joined=%zu\n",created,exited,joined_count);
     pthread_mutex_unlock(&lock);
 }
-

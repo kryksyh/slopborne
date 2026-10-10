@@ -38,7 +38,12 @@ static uint64_t pool_size_bytes(void) {
 #define POOL_SIZE pool_size_bytes()
 #define FLEXIBLE_SIZE (UINT64_C(448) * 1024 * 1024)
 #define PAGE UINT64_C(16384)
+#ifdef __APPLE__
+/* Rosetta reserves [64 GiB,448 GiB). Stay above it, still within 40 bits. */
+#define USER_MIN UINT64_C(0x7000000000)
+#else
 #define USER_MIN UINT64_C(0x1000000000)
+#endif
 #define USER_MAX UINT64_C(0xfc00000000)
 #define LIMIT 4096
 #define INVALID ((int32_t)UINT32_C(0x80020016))
@@ -245,24 +250,63 @@ static int pool(void) {
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (pool_fd>=0) return 0;
+#ifdef __APPLE__
+    runtime_memory_reserve();
+    pool_fd=bb_macos_memory_fd();
+#else
     pool_fd=memfd_create("bb-guest-memory", MFD_CLOEXEC);
-    if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
+#endif
+    if (pool_fd<0) return -1;
+    if (ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) {
+        int saved=errno; close(pool_fd); pool_fd=-1; errno=saved; return -1;
+    }
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
-    if (view==MAP_FAILED) return -1;
+    if (view==MAP_FAILED) {
+        int saved=errno; close(pool_fd); pool_fd=-1; errno=saved; return -1;
+    }
     backing_base=view;
     return 0;
 }
-void runtime_memory_reserve(void) {}
+#ifdef __APPLE__
+static pthread_once_t reserve_once=PTHREAD_ONCE_INIT;
+static void reserve_guest_range(void) {
+    if (bb_macos_map_fixed(USER_MIN,USER_MAX-USER_MIN,PROT_NONE)==MAP_FAILED) {
+        perror("STOP: reserving PS4 address space"); exit(21);
+    }
+}
+#endif
+void runtime_memory_reserve(void) {
+#ifdef __APPLE__
+    pthread_once(&reserve_once,reserve_guest_range);
+#endif
+}
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
+#ifdef __APPLE__
+    /* MAP_FIXED may replace only the address range we own, never Rosetta/host memory. */
+    if (address<USER_MIN || address>=USER_MAX || size>USER_MAX-address) { errno=EINVAL; return -1; }
+    runtime_memory_reserve();
+#endif
     void *mapped = !reserved
         ? mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     return mapped==MAP_FAILED ? -1 : 0;
 }
-static int host_unmap(uintptr_t address, uint64_t size) { return munmap((void *)address,size); }
+static int host_unmap(uintptr_t address, uint64_t size) {
+#ifdef __APPLE__
+    /* Keep the reservation owned by us after guest unmaps. */
+    return host_map(address,size,PROT_NONE,1,0);
+#else
+    return munmap((void *)address,size);
+#endif
+}
 static int host_protect(uintptr_t address, uint64_t size, int prot) { return mprotect((void *)address,size,prot); }
 static void host_discard(uint64_t phys, uint64_t size) {
+#ifdef __APPLE__
+    /* shm objects do not support F_PUNCHHOLE. Zero the unprotected alias. */
+    memset(backing_base+phys,0,(size_t)size);
+#else
     fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+#endif
 }
 #endif
 static void queue_hook(int kind, uintptr_t address, uint64_t size) {
@@ -653,15 +697,16 @@ uintptr_t runtime_memory_resolve(const char *name) {
     return RUNTIME_LOOKUP(exports,name);
 }
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
- * [LOW_MIN, USER_MIN): PS4 code packs pointers into 40-bit fields. */
+ * [LOW_MIN, LOW_MAX): PS4 code packs pointers into 40-bit fields. */
 #define LOW_MIN UINT64_C(0x0800000000)
+#define LOW_MAX UINT64_C(0x1000000000)
 static uintptr_t low_next=LOW_MIN;
 void *runtime_low_map(size_t size, int prot) {
     size=align_up(size,PAGE);
     write_lock();
 #ifdef _WIN32
     void *p=NULL;
-    while (!p && low_next+size<=USER_MIN) {
+    while (!p && low_next+size<=LOW_MAX) {
         p=VirtualAlloc((void *)low_next,size,MEM_RESERVE|MEM_COMMIT,win_prot(prot));
         low_next+=size+UINT64_C(65536); /* unmapped gap catches overruns; allocation granularity */
     }
@@ -669,8 +714,12 @@ void *runtime_low_map(size_t size, int prot) {
     return p;
 #else
     void *p=MAP_FAILED;
-    while (low_next+size<=USER_MIN) {
+    while (low_next+size<=LOW_MAX) {
+#ifdef __APPLE__
+        p=bb_macos_map_fixed(low_next,size,prot);
+#else
         p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED_NOREPLACE,-1,0);
+#endif
         low_next+=size+PAGE; /* unmapped gap catches overruns */
         if (p!=MAP_FAILED) break;
     }

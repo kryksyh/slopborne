@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <vulkan/vulkan.h>
+#include "../src/vulkan_portability.h"
 
 static VkDeviceSize largest_local_heap(VkPhysicalDevice device) {
     VkPhysicalDeviceMemoryProperties memory;
@@ -64,17 +65,65 @@ static int live_resolution_suits(VkPhysicalDevice device) {
     return suits;
 }
 
+/* Report native feature availability and the fallback selected by Instance::CreateDevice.
+ * Passing these gates is not a rendering or game-compatibility test. */
+static int renderer_requirements(VkPhysicalDevice device) {
+    VkPhysicalDeviceProperties props;
+    vkGetPhysicalDeviceProperties(device, &props);
+    printf("GPU renderer requirements: %s\n", props.deviceName);
+    const char *extensions[] = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+        VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
+        VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME,
+        VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
+    };
+    int supported = 1;
+    for (size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); ++i) {
+        const int present = has_extension(device, extensions[i]);
+        printf("  %s: %s\n", extensions[i], present ? "available" : "MISSING");
+        supported &= present;
+    }
+    VkPhysicalDeviceRobustness2FeaturesEXT robustness = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+    };
+    VkPhysicalDeviceFeatures2 features = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = has_extension(device, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? &robustness : NULL,
+    };
+    vkGetPhysicalDeviceFeatures2(device, &features);
+    const struct { const char *name; VkBool32 available; } required[] = {
+        {"robustBufferAccess2", robustness.robustBufferAccess2},
+        {"robustImageAccess2", robustness.robustImageAccess2},
+        {"nullDescriptor", robustness.nullDescriptor},
+    };
+    for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); ++i) {
+        printf("  %s: %s\n", required[i].name, required[i].available ? "available" : "MISSING");
+
+    }
+    int fallback = !robustness.robustBufferAccess2 || !robustness.nullDescriptor;
+    const char *override = getenv("BB_EMULATE_ROBUSTNESS");
+    if (override) fallback = override[0] == '1';
+    supported &= !!robustness.robustImageAccess2;
+    supported &= fallback || (robustness.robustBufferAccess2 && robustness.nullDescriptor);
+    if (fallback) puts("Using shader bounds checks, vertex pulling, and null-resource emulation.");
+    puts(supported ? "Required feature gates pass; gameplay is not validated."
+                   : "Renderer initialization blocked by a feature without an enabled fallback.");
+    return supported;
+}
+
 int main(int argc, char **argv) {
     const int live_mode = argc > 1 && !strcmp(argv[1], "--live-resolution");
+    const int renderer_mode = argc > 1 && !strcmp(argv[1], "--renderer-requirements");
     const VkApplicationInfo app = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "bbport scene scaling probe",
         .apiVersion = VK_API_VERSION_1_3,
     };
-    const VkInstanceCreateInfo create = {
+    VkInstanceCreateInfo create = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &app,
     };
+    bb_vulkan_portability_instance(&create);
     VkInstance instance = VK_NULL_HANDLE;
     if (vkCreateInstance(&create, NULL, &instance) != VK_SUCCESS) {
         fputs("GPU scene scaling: cannot create Vulkan instance\n", stderr);
@@ -114,6 +163,12 @@ int main(int argc, char **argv) {
         free(devices);
         vkDestroyInstance(instance, NULL);
         return 0;
+    }
+    if (renderer_mode) {
+        const int supported = renderer_requirements(selected);
+        free(devices);
+        vkDestroyInstance(instance, NULL);
+        return supported ? 0 : 1;
     }
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(selected, &props);

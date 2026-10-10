@@ -15,6 +15,7 @@
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/program.h"
+#include "shader_recompiler/ir/passes/resource_pass.h"
 #include "shader_recompiler/runtime_info.h"
 
 namespace Shader::Backend::SPIRV {
@@ -119,7 +120,7 @@ void Invoke(EmitContext& ctx, IR::Inst* inst) {
     }
 }
 
-void EmitInst(EmitContext& ctx, IR::Inst* inst) {
+void EmitInstRaw(EmitContext& ctx, IR::Inst* inst) {
     switch (inst->GetOpcode()) {
 #define OPCODE(name, result_type, ...)                                                             \
     case IR::Opcode::name:                                                                         \
@@ -144,10 +145,33 @@ Id TypeId(const EmitContext& ctx, IR::Type type) {
         return ctx.U32[4];
     case IR::Type::F32:
         return ctx.F32[1];
+    case IR::Type::F32x4:
+        return ctx.F32[4];
     case IR::Type::U64:
         return ctx.U64;
     default:
         UNREACHABLE_MSG("Phi node type {}", type);
+    }
+}
+
+void EmitInst(EmitContext& ctx, IR::Inst* inst) {
+    const auto op = inst->GetOpcode();
+    const bool image_op = Optimization::IsImageInstruction(*inst) ||
+        (op >= IR::Opcode::ImageSampleImplicitLod && op <= IR::Opcode::ImageGradient);
+    if (!ctx.profile.emulate_robustness || !image_op) {
+        EmitInstRaw(ctx, inst);
+        return;
+    }
+    const u32 handle = inst->Arg(0).U32() & 0xffff;
+    const Id present = ctx.ResourcePresent(NUM_BUFFERS + handle);
+    if (inst->Type() == IR::Type::Void) {
+        ctx.GuardWrite(present, [&] { EmitInstRaw(ctx, inst); });
+    } else {
+        const Id result = ctx.GuardRead(TypeId(ctx, inst->Type()), present, [&] {
+            EmitInstRaw(ctx, inst);
+            return inst->Definition<Id>();
+        });
+        inst->SetDefinition<Id>(result);
     }
 }
 

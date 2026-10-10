@@ -319,9 +319,9 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 // bbport: raw copy of an image for BB_FRAME_DUMP_TRIGGER, written once the GPU is done.
 static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
-                    int index) {
+                    int index, u32 bytes_per_pixel = 4) {
     const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                                       .size = VkDeviceSize(w) * h * 4,
+                                       .size = VkDeviceSize(w) * h * bytes_per_pixel,
                                        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
     const VmaAllocationCreateInfo alloc_ci{
         .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
@@ -358,10 +358,35 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // as raw 32-bit pixels (menus and movies included; the upscaler dumps scene frames only).
     static const char* frame_dump_trigger = std::getenv("BB_FRAME_DUMP_TRIGGER");
     static int frame_dump_index = 0;
-    const bool frame_dump = frame_dump_trigger && std::remove(frame_dump_trigger) == 0;
+    // A numbered capture needs no trigger-file deletion and works under the
+    // macOS launcher's file-preservation sandbox. Frames are counted from one.
+    static const u64 frame_dump_at = [] {
+        const char* value = std::getenv("BB_FRAME_DUMP_AT");
+        return value ? std::strtoull(value, nullptr, 10) : 0;
+    }();
+    static u64 prepared_frames = 0;
+    // Automation can increment this file's integer to capture without deleting
+    // a trigger or depending on a frame number during shader compilation.
+    static const char* capture_sequence_file = std::getenv("BB_FRAME_DUMP_SEQUENCE");
+    static unsigned long long capture_sequence = 0;
+    bool sequence_capture = false;
+    if (capture_sequence_file) {
+        if (FILE* file = std::fopen(capture_sequence_file, "r")) {
+            unsigned long long sequence{};
+            if (std::fscanf(file, "%llu", &sequence) == 1 && sequence != capture_sequence) {
+                capture_sequence = sequence;
+                sequence_capture = true;
+            }
+            std::fclose(file);
+        }
+    }
+    const bool frame_dump = (++prepared_frames == frame_dump_at) ||
+                            sequence_capture ||
+                            (frame_dump_trigger && std::remove(frame_dump_trigger) == 0);
     // bbport: scaled upscaler presets: the output-size display buffer drawn by the port.
     TemporalUpscaler::Display display{};
-    const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(cpu_address, display);
+    const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(
+        cpu_address, GetFrameViewFormat(attribute.attrib.pixel_format), display);
     VideoCore::ImageId image_id{};
     if (!upscaled) {
         auto desc = VideoCore::TextureCache::ImageDesc{attribute, cpu_address};
@@ -392,6 +417,41 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 
     draw_scheduler.EndRendering();
     const auto cmdbuf = draw_scheduler.CommandBuffer();
+    // Optional readback of a color intermediate image, without refreshing its
+    // contents from guest memory. This isolates rendering from presentation.
+    if (frame_dump) {
+        if (const char* addresses = std::getenv("BB_DUMP_IMAGE_ADDR")) {
+            while (*addresses) {
+                char* next{};
+                const VAddr address = std::strtoull(addresses, &next, 0);
+                if (next == addresses) {
+                    break;
+                }
+                const auto id = texture_cache.FindImageFromRange(address, 1, false);
+                if (id) {
+                    auto& image = texture_cache.GetImage(id);
+                    const bool supported = image.info.num_bits == 32 ||
+                        image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat;
+                    if (supported && !image.info.props.is_depth && !image.info.props.is_block &&
+                        image.info.num_samples == 1 && image.info.size.depth == 1) {
+                        runtime.Transit(&image, vk::ImageLayout::eTransferSrcOptimal,
+                                        vk::PipelineStageFlagBits2::eTransfer,
+                                        vk::AccessFlagBits2::eTransferRead);
+                        runtime.FlushBarriers();
+                        char name[128];
+                        std::snprintf(name, sizeof(name), "image_%llx_%s",
+                                      static_cast<unsigned long long>(address),
+                                      vk::to_string(image.info.pixel_format).c_str());
+                        DumpRaw(instance, draw_scheduler, cmdbuf, image.GetImage(),
+                                vk::ImageLayout::eTransferSrcOptimal, image.info.size.width,
+                                image.info.size.height, name, frame_dump_index,
+                                image.info.num_bits / 8);
+                    }
+                }
+                addresses = *next == ',' ? next + 1 : next;
+            }
+        }
+    }
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .imageMemoryBarrierCount = 1,
         .pImageMemoryBarriers = &pre_barrier,
@@ -405,16 +465,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     vk::ImageView image_view{};
     vk::Extent2D image_size{};
     if (upscaled) {
-        const auto device = instance.GetDevice();
-        image_view = Check(device.createImageView({
-            .image = display.image,
-            .viewType = vk::ImageViewType::e2D,
-            .format = view_info.format,
-            .components = {vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eIdentity,
-                           vk::ComponentSwizzle::eIdentity, vk::ComponentSwizzle::eOne},
-            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
-        }));
-        draw_scheduler.DeferOperation([device, image_view] { device.destroyImageView(image_view); });
+        image_view = display.view;
         image_size = vk::Extent2D{display.width, display.height};
         const vk::ImageMemoryBarrier2 to_read{
             .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -653,18 +704,27 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
                                vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion,
                                {}, {}, pre_barriers);
-        const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
-        cmdbuf.clearColorImage(swapchain_image, vk::ImageLayout::eTransferDstOptimal, black, color_range);
-        const vk::MemoryBarrier clear_done{
-            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-        };
-        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer,
-                               vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
+        const auto blit =
+            MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height);
+        const bool covers_swapchain = blit.dstOffsets[0].x == 0 && blit.dstOffsets[0].y == 0 &&
+                                      blit.dstOffsets[1].x == s32(extent.width) &&
+                                      blit.dstOffsets[1].y == s32(extent.height);
+        // Only letterbox bars need clearing. A full-coverage blit overwrites every
+        // pixel, making the clear and its transfer dependency redundant.
+        if (!covers_swapchain) {
+            const vk::ClearColorValue black{std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}};
+            cmdbuf.clearColorImage(swapchain_image, vk::ImageLayout::eTransferDstOptimal, black,
+                                  color_range);
+            const vk::MemoryBarrier clear_done{
+                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+            };
+            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                   vk::PipelineStageFlagBits::eTransfer,
+                                   vk::DependencyFlagBits::eByRegion, clear_done, {}, {});
+        }
         cmdbuf.blitImage(frame->image, vk::ImageLayout::eTransferSrcOptimal, swapchain_image,
-                         vk::ImageLayout::eTransferDstOptimal,
-                         MakeImageBlitFit(frame->width, frame->height, extent.width, extent.height),
-                         vk::Filter::eLinear);
+                         vk::ImageLayout::eTransferDstOptimal, blit, vk::Filter::eLinear);
         // bbport: the settings menu / FPS counter over the frame, at display resolution.
         const bool overlay = BbOverlay::Visible();
         const std::array post_barriers{

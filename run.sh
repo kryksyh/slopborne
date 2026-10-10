@@ -43,10 +43,12 @@ original_game=$game
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
     --mods-dir "${BB_MODS_DIR:-$data/mods}" --config "${BB_MODS_CONFIG:-$data/mods.json}" \
     --enabled "${BB_MODS_ENABLED:-1}")
-# A private merged view lasts for this launch, including restarts. Cleanup only our own view.
-if [[ $game != "$(realpath "$original_game")" ]]; then
+# Compare filesystem identity, including on case-insensitive volumes.
+if [[ ! $game -ef $original_game ]]; then
     mod_game=$game
-    trap '"$PYTHON" -c '\''import shutil,sys; shutil.rmtree(sys.argv[1])'\'' "$mod_game"' EXIT
+    # Retain generated views. Never recursively delete a path returned by the
+    # mod selector: aliases/case differences can still name the original game.
+    echo "Mods: retaining generated view at $mod_game" >&2
 fi
 "$PYTHON" scripts/prepare.py "$game" --out "$out"
 "$PYTHON" scripts/link_libc.py "$game" --out "$out"
@@ -112,14 +114,4 @@ else
     probe=out/bb-probe
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
-if [[ -n ${mod_game:-} ]]; then
-    "$probe" "${probe_args[@]}" &
-    mod_pid=$!
-    trap 'kill -TERM "$mod_pid" 2>/dev/null || true' TERM INT
-    mod_status=0
-    wait "$mod_pid" || mod_status=$?
-    # An interrupted wait must finish the child before removing its mounted view.
-    if kill -0 "$mod_pid" 2>/dev/null; then wait "$mod_pid" || mod_status=$?; fi
-    exit "$mod_status"
-fi
 exec "$probe" "${probe_args[@]}"

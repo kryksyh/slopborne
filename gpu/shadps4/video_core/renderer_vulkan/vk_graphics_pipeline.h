@@ -65,6 +65,13 @@ struct GraphicsPipelineKey {
         return std::memcmp(this, &key, sizeof(key)) == 0;
     }
 
+    bool HasNoRasterOutput() const noexcept {
+        return num_color_attachments == 0 && motion_vectors == 0 &&
+               z_format == AmdGpu::DepthBuffer::ZFormat::Invalid &&
+               stencil_format == AmdGpu::DepthBuffer::StencilFormat::Invalid &&
+               stage_hashes[u32(Shader::SwStage::Fragment)] == 0;
+    }
+
     void Serialize(Serialization::Archive& ar) const;
     bool Deserialize(Serialization::Archive& ar);
 };

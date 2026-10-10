@@ -221,6 +221,17 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "Bloodborne";
     const s32 width = config->width, height = config->height;
+#ifdef __APPLE__
+    struct WindowRequest { const char* title; s32 width, height; } request{title.c_str(), width, height};
+    if (!SDL_RunOnMainThread([](void* data) {
+            const auto& r = *static_cast<WindowRequest*>(data);
+            g_window = new Frontend::WindowSDL(r.width, r.height, r.title);
+            BbDisplayRefreshHz();
+        }, &request, true)) {
+        LOG_ERROR(Frontend, "Cannot create game window on the main thread: {}", SDL_GetError());
+        return -1;
+    }
+#else
     g_window_thread = std::thread([title, width, height] {
         Common::SetCurrentThreadName("bb:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
@@ -242,12 +253,37 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
         std::unique_lock lock{g_window_mutex};
         g_window_cv.wait(lock, [] { return g_window_ready; });
     }
+#endif
     Core::Loader::SymbolsResolver resolver;
     // GnmDriver creates the presenter that the VideoOut present thread uses.
     Libraries::GnmDriver::RegisterLib(&resolver);
     Libraries::VideoOut::RegisterLib(&resolver);
     return 0;
 }
+
+#ifdef __APPLE__
+// Cocoa requires window creation and event pumping on the process main thread.
+// Run the guest loader on a worker while SDL dispatches main-thread requests here.
+extern "C" int bbgpu_macos_run(int (*entry)(int, char**), int argc, char** argv) {
+    if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+        std::fprintf(stderr, "SDL initialization failed: %s\n", SDL_GetError());
+        return 1;
+    }
+    std::atomic<bool> done{false};
+    int result = 1;
+    std::thread guest([&] { result = entry(argc, argv); done.store(true); });
+    while (!done.load()) {
+        if (g_window) {
+            if (!g_window->PollEvents()) std::_Exit(0);
+        } else {
+            SDL_PumpEvents();
+        }
+        SDL_Delay(2);
+    }
+    guest.join();
+    return result;
+}
+#endif
 
 namespace Libraries::Kernel { void StartKernelService(); }
 extern "C" void bbnet_register(void); // bbnet/bbnet_glue.cpp: network and PSN (co-op)

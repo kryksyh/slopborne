@@ -8,6 +8,8 @@
 namespace Shader {
 
 struct Profile {
+    // Bump when code generation changes without a corresponding capability change.
+    u32 shader_cache_revision{1};
     u32 max_viewport_width{};
     u32 max_viewport_height{};
     u32 max_shared_memory_size{};
@@ -54,6 +56,8 @@ struct Profile {
     bool needs_unorm_fixup{};
     bool needs_clip_distance_emulation{};
     bool supports_shader_stencil_export{};
+    bool emulate_robustness{};
+    bool bounded_buffer_reads{}; // Opt-in experiment; preserve graphics settings.
 
     bool operator==(const Profile&) const = default;
 };

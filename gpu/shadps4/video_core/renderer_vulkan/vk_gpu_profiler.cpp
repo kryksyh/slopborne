@@ -21,10 +21,14 @@ GpuProfiler::GpuProfiler(const Instance& instance, Scheduler& scheduler_)
     : device{instance.GetDevice()}, scheduler{scheduler_} {
     const vk::QueryPoolCreateInfo info = {
         .queryType = vk::QueryType::eTimestamp,
-        .queryCount = NumSlices * SliceQueries,
+        .queryCount = SliceQueries,
     };
-    pool = Check<"create timestamp query pool">(device.createQueryPoolUnique(info));
-    device.resetQueryPool(*pool, 0, NumSlices * SliceQueries);
+    // Metal limits a counter sample buffer to 4096 timestamps. A separate pool
+    // for each in-flight frame keeps native counters available on MoltenVK.
+    for (auto& pool : pools) {
+        pool = Check<"create timestamp query pool">(device.createQueryPoolUnique(info));
+        device.resetQueryPool(*pool, 0, SliceQueries);
+    }
     period_ns = instance.GetPhysicalDevice().getProperties().limits.timestampPeriod;
     for (auto& k : keys) {
         k.reserve(SliceQueries);
@@ -39,10 +43,10 @@ void GpuProfiler::WriteTimestamp(u64 key) {
     // Outside render passes: radv_CmdWriteTimestamp2 crashed inside some. Marks sit where a
     // pass, dispatch or submission ends anyway.
     scheduler.EndRendering();
-    const u32 query = slice * SliceQueries + used[slice]++;
+    const u32 query = used[slice]++;
     keys[slice].push_back(key);
     current = key;
-    scheduler.Record([pool = *pool, query](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([pool = *pools[slice], query](vk::CommandBuffer cmdbuf) {
         cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands, pool, query);
     });
 }
@@ -51,8 +55,8 @@ void GpuProfiler::BeginFrame() {
     // Close the frame: one more timestamp without a label.
     if (used[slice] > 0 && used[slice] < SliceQueries) {
         scheduler.EndRendering();
-        const u32 query = slice * SliceQueries + used[slice]++;
-        scheduler.Record([pool = *pool, query](vk::CommandBuffer cmdbuf) {
+        const u32 query = used[slice]++;
+        scheduler.Record([pool = *pools[slice], query](vk::CommandBuffer cmdbuf) {
             cmdbuf.writeTimestamp2(vk::PipelineStageFlagBits2::eAllCommands, pool, query);
         });
         pending[slice] = true;
@@ -63,7 +67,7 @@ void GpuProfiler::BeginFrame() {
         Collect(slice);
     }
     if (used[slice]) {
-        device.resetQueryPool(*pool, slice * SliceQueries, used[slice]);
+        device.resetQueryPool(*pools[slice], 0, used[slice]);
     }
     used[slice] = 0;
     keys[slice].clear();
@@ -76,7 +80,7 @@ void GpuProfiler::Collect(u32 which) {
     std::vector<u64> stamps(count);
     // Four frames on this is complete unless the GPU lags that far: then wait for it.
     const auto result = device.getQueryPoolResults(
-        *pool, which * SliceQueries, count, count * sizeof(u64), stamps.data(), sizeof(u64),
+        *pools[which], 0, count, count * sizeof(u64), stamps.data(), sizeof(u64),
         vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
     if (result != vk::Result::eSuccess) {
         return;

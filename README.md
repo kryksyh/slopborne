@@ -89,6 +89,8 @@ If the game shows only a black screen, try **Advanced → Clear shader cache** f
 
 ## Building from source
 
+Experimental macOS build instructions and current limitations: [packaging/macos/README.md](packaging/macos/README.md). The macOS build reaches gameplay and has completed automated camera sweeps; graphics correctness and sustained 30 FPS remain experimental.
+
 See [packaging/windows/README.md](packaging/windows/README.md): MSYS2 CLANG64, `bash build.sh`,
 then `bash packaging/windows/package.sh`. DLSS is built separately with
 `packaging/windows/build_dlss.sh`.

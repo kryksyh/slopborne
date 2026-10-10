@@ -1,9 +1,10 @@
 from paths import ROOT
+import os
 from pathlib import Path
 import subprocess
 import unittest
 
-EXE = ROOT / 'out/runtime-test'
+EXE = Path(os.environ.get('BB_TEST_BIN_DIR', ROOT / 'out')) / 'runtime-test'
 
 
 @unittest.skipUnless(EXE.exists(), 'run bash build.sh --test first')

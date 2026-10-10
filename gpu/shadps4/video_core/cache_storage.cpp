@@ -14,6 +14,7 @@
 #include <miniz.h>
 
 #include <condition_variable>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -275,6 +276,18 @@ void DataBase::Clear() {
         return;
     }
     std::error_code ec;
+#ifdef __APPLE__
+    // Keep incompatible generated caches for inspection, rather than deleting
+    // files when a renderer/profile update requires a fresh cache.
+    auto retained = cache_path;
+    retained += fmt::format(".retained-{}",
+        std::chrono::system_clock::now().time_since_epoch().count());
+    std::filesystem::rename(cache_path, retained, ec);
+    ASSERT_MSG(!ec, "Cannot retain old pipeline cache: {}", ec.message());
+    std::filesystem::create_directories(cache_path, ec);
+    ASSERT_MSG(!ec, "Cannot create new pipeline cache: {}", ec.message());
+    LOG_WARNING(Render, "Pipeline cache retained at {}; rebuilding", retained.string());
+#else
     u64 removed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
         if (entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec)) {
@@ -282,6 +295,7 @@ void DataBase::Clear() {
         }
     }
     LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt for this build", removed);
+#endif
 }
 
 void DataBase::FinishPreload() {

@@ -62,7 +62,16 @@ void Semaphore::Wait(u64 tick) {
         .pValues = &tick,
     };
 
-    while (instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT) != vk::Result::eSuccess) {
+    for (;;) {
+        const auto result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
+        if (result == vk::Result::eSuccess) {
+            break;
+        }
+        // A lost device cannot complete this tick. Retrying the error spins a
+        // CPU core forever and leaves the last frame frozen on screen.
+        ASSERT_MSG(result == vk::Result::eTimeout,
+                   "GPU semaphore wait failed at tick {} (last completed {}): {}",
+                   tick, KnownGpuTick(), vk::to_string(result));
     }
     Refresh();
 }
