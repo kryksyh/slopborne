@@ -540,8 +540,18 @@ void VideoOutDriver::Flip(const Request& req) {
         }
     }
 
-    // Update flip status.
     auto* port = req.port;
+    // bbport: release the buffer this flip replaced before the guest can learn of the flip (flip
+    // status, flip events), not after: the game renders into that buffer next and sets its label
+    // to 1 again, which a later reset here would clear ("Out of order flip IRQ" when that frame's
+    // flip interrupt arrives).
+    if (port->prev_index != -1) {
+        port->buffer_labels[port->prev_index] = 0;
+        port->SignalVoLabel();
+    }
+    port->prev_index = req.index;
+
+    // Update flip status.
     {
         std::unique_lock lock{port->port_mutex};
         auto& flip_status = port->flip_status;
@@ -567,14 +577,6 @@ void VideoOutDriver::Flip(const Request& req) {
                                         (req.flip_arg << 16)));
         }
     }
-
-    // Reset prev flip label
-    if (port->prev_index != -1) {
-        port->buffer_labels[port->prev_index] = 0;
-        port->SignalVoLabel();
-    }
-    // save to prev buf index
-    port->prev_index = req.index;
 }
 
 void VideoOutDriver::DrawBlankFrame() {
