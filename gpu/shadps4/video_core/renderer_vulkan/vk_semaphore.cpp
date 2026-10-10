@@ -34,6 +34,7 @@ void Semaphore::Refresh() {
     do {
         this_tick = gpu_tick.load(std::memory_order_acquire);
         auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+        AwaitDeviceLostReports(counter_result);
         ASSERT_MSG(counter_result == vk::Result::eSuccess,
                    "Failed to get master semaphore value: {}", vk::to_string(counter_result));
         counter = cntr;
@@ -67,6 +68,7 @@ void Semaphore::Wait(u64 tick) {
         if (result == vk::Result::eSuccess) {
             break;
         }
+        AwaitDeviceLostReports(result);
         // A lost device cannot complete this tick. Retrying the error spins a
         // CPU core forever and leaves the last frame frozen on screen.
         ASSERT_MSG(result == vk::Result::eTimeout,

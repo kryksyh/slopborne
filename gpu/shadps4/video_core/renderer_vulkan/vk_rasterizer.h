@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace AmdGpu {
@@ -251,7 +252,26 @@ private:
     void BindTextures(const Shader::Info& stage, const PreparedStage* prepared,
                       Shader::Backend::Bindings& binding, u32& write_index, bool& barrier,
                       bool on_helper = false);
-    bool BindResources(const Pipeline* pipeline);
+    bool BindResources(const Pipeline* pipeline, bool lowered_geometry = false);
+    bool PrepareGeometry(const GeometryReplayStages& geometry, bool indexed, u32 index_offset);
+    StagingBufferRef geometry_vertices{};
+    u32 geometry_points{};
+    struct GeometryArguments { u32 vertices, instances, base_vertex, base_instance; };
+    std::optional<GeometryArguments> geometry_arguments;
+    /// bbport: GPU-written arguments of the indirect geometry draw being recorded; its ES/GS
+    /// dispatches and replay draw take their sizes from geometry_indirect.
+    struct GeometryGpuArguments {
+        const VideoCore::Buffer* args;
+        u64 args_offset;
+        const VideoCore::Buffer* count;
+        u64 count_offset;
+    };
+    std::optional<GeometryGpuArguments> geometry_gpu_arguments;
+    StagingBufferRef geometry_indirect{};
+    void PrepareGeometryArguments(const GeometryReplayStages& geometry,
+                                  const StagingBufferRef& header);
+    void DrawGeometryIndirect(const GraphicsPipeline* pipeline, bool indexed,
+                               const IndirectDraw& indirect);
     void PatchNullResources(const Shader::Info& stage, u32 first_write);
     vk::ImageView NullImageView(const Shader::ImageResource& desc, const Shader::Info& stage);
     struct NullImage {
@@ -358,10 +378,14 @@ private:
     struct BoundBuffer {
         const VideoCore::Buffer* buffer;
         u64 offset;
-        u32 size;
+        u64 size;
         bool is_written;
+        vk::AccessFlags2 read_access = vk::AccessFlagBits2::eShaderRead;
+        vk::PipelineStageFlags2 read_stage{};
     };
-    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS> bound_buffers;
+    // Shader resources plus merged vertex streams, the index buffer, and indirect args/count.
+    boost::container::static_vector<BoundBuffer, Shader::NUM_BUFFERS + MaxVertexBufferCount + 3>
+        bound_buffers;
 
     u32 set_write_index{};
     Pipeline::DescriptorWrites set_writes;

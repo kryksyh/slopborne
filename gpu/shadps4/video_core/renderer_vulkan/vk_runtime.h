@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <unordered_map>
+#include <boost/icl/interval_set.hpp>
 #include "common/types.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_barrier_tracker.h"
@@ -97,6 +99,22 @@ public:
 
     void FlushBarriers();
 
+    /// bbport: notes a buffer range read or written by commands of the current submission.
+    void TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size);
+
+    /// bbport: commands of this submission access buffers TouchBuffer cannot name.
+    void TouchUntracked() {
+        SyncSubmission();
+        submission_untracked = true;
+    }
+
+    /// bbport: while a render pass is open, records `copies` into the upload prologue instead
+    /// (the pass is not split) when no command of this submission has touched the
+    /// destination ranges yet. False when the copy must stay in order.
+    /// `src_tracked`: the source may also be written by commands (not a staging buffer).
+    bool CopyBufferBeforePass(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
+                              std::span<const vk::BufferCopy> copies, bool src_tracked = false);
+
     /// bbport: runs before this thread changes image state (layouts, pending image
     /// barriers): the rasterizer joins its texture binding helper there (BindHelper).
     void SetImageAccessHook(void (*hook)(void*), void* context) {
@@ -130,6 +148,11 @@ private:
     };
     std::array<AccessMemo, 512> access_memo{};
     u32 access_epoch = 1;
+    // bbport: buffer ranges touched by commands of the submission being recorded.
+    std::unordered_map<u64, boost::icl::interval_set<u64>> submission_ranges;
+    u64 submission_tick = ~0ull;
+    bool submission_untracked = false;
+    void SyncSubmission();
 };
 
 } // namespace Vulkan

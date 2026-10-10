@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <cstdio>
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -226,7 +228,8 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
         // Execute buffer copies.
         LOG_TRACE(Render_Vulkan, "HLE buffer copy: src_size = {}, dst_size = {}",
                   src_offset_max - src_offset_min, dst_offset_max - dst_offset_min);
-        if (!MultiCopy(rasterizer, src_buf, dst_buf, vk_copies)) {
+        if (!runtime.CopyBufferBeforePass(src_buf, dst_buf, vk_copies, true) &&
+            !MultiCopy(rasterizer, src_buf, dst_buf, vk_copies)) {
             runtime.CopyBuffer(src_buf, dst_buf, vk_copies);
         }
         batch_start = batch_end;
@@ -235,10 +238,39 @@ static bool ExecuteCopyShaderHLE(const Shader::Info& info, const AmdGpu::Compute
     return true;
 }
 
+// BB_PASS_STATS=1: how the copy shader calls interleave with draws (batching potential).
+static void CountCopyShader(u32 ranges) {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_PASS_STATS");
+        return env && env[0] == '1';
+    }();
+    if (!enabled) {
+        return;
+    }
+    static u64 calls, after_copy, total_ranges, last_draws = ~0ull;
+    static auto last = std::chrono::steady_clock::now();
+    const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+    ++calls;
+    after_copy += draws == last_draws;
+    total_ranges += ranges;
+    last_draws = draws;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - last).count();
+    if (seconds >= 5.0) {
+        std::printf("Copy shader: %.0f calls/s, %.0f directly after another copy shader call, "
+                    "%.0f ranges/call\n",
+                    calls / seconds, after_copy / seconds, double(total_ranges) / calls);
+        std::fflush(stdout);
+        calls = after_copy = total_ranges = 0;
+        last = now;
+    }
+}
+
 bool ExecuteShaderHLE(const Shader::Info& info, const AmdGpu::Regs& regs,
                       const AmdGpu::ComputeProgram& cs_program, Rasterizer& rasterizer) {
     switch (info.pgm_hash) {
     case COPY_SHADER_HASH:
+        CountCopyShader(cs_program.dim_x);
         return ExecuteCopyShaderHLE(info, cs_program, rasterizer);
     default:
         return false;

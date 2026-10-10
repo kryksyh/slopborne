@@ -423,6 +423,7 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
     if (needs_flush) {
         FlushBarriers();
     }
+    TouchBuffer(buffer, offset, copy_size);
 
     const auto download_copy = buffer_copy;
     buffer_copy.imageSubresource.aspectMask = dst->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
@@ -759,6 +760,7 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
 
 bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 size,
                                bool check_read_access) {
+    if (size == 0) return false;
     const AddressRange range = {
         .resource = reinterpret_cast<u64>(handle),
         .range_start = offset,
@@ -771,8 +773,67 @@ bool Runtime::IsBufferAccessed(const VideoCore::Buffer* handle, u64 offset, u64 
     return has_access;
 }
 
+void Runtime::SyncSubmission() {
+    const u64 tick = scheduler.CurrentTick();
+    if (tick == submission_tick) {
+        return;
+    }
+    submission_tick = tick;
+    submission_ranges.clear();
+    submission_untracked = false;
+    // Memo hits skip TouchBuffer: start over with the new submission.
+    ++access_epoch;
+}
+
+void Runtime::TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size) {
+    SyncSubmission();
+    submission_ranges[reinterpret_cast<u64>(handle)] +=
+        boost::icl::interval<u64>::right_open(offset, offset + size);
+}
+
+bool Runtime::CopyBufferBeforePass(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
+                                   std::span<const vk::BufferCopy> copies, bool src_tracked) {
+    if (!scheduler.IsRendering() || BbToggle::Disabled(BbToggle::UploadPrologue)) {
+        return false;
+    }
+    SyncSubmission();
+    if (submission_untracked) {
+        return false;
+    }
+    const auto touched = [&](const VideoCore::Buffer* buffer, bool is_src) {
+        const auto it = submission_ranges.find(reinterpret_cast<u64>(buffer));
+        if (it == submission_ranges.end()) {
+            return false;
+        }
+        return std::ranges::any_of(copies, [&](const vk::BufferCopy& copy) {
+            const u64 offset = is_src ? copy.srcOffset : copy.dstOffset;
+            return boost::icl::intersects(
+                it->second, boost::icl::interval<u64>::right_open(offset, offset + copy.size));
+        });
+    };
+    if (touched(dst, false) || (src_tracked && touched(src, true))) {
+        return false;
+    }
+    // Commands of this submission do not touch these ranges before here; earlier prologue
+    // copies may (an upload of the source), hence the barrier between prologue copies.
+    scheduler.RecordPrologue([&](vk::CommandBuffer cmdbuf) {
+        const vk::MemoryBarrier2 order = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
+        };
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &order});
+        cmdbuf.copyBuffer(src->Handle(), dst->Handle(), static_cast<u32>(copies.size()),
+                          copies.data());
+    });
+    return true;
+}
+
 void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size,
                            vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access) {
+    if (size == 0) return;
+    SyncSubmission();
     AddressRange range = {
         .resource = reinterpret_cast<u64>(handle),
         .range_start = offset,
@@ -780,6 +841,7 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
     };
 
     constexpr static vk::AccessFlags2 READ_MASK =
+        vk::AccessFlagBits2::eIndirectCommandRead |
         vk::AccessFlagBits2::eIndexRead | vk::AccessFlagBits2::eVertexAttributeRead |
         vk::AccessFlagBits2::eUniformRead | vk::AccessFlagBits2::eShaderRead |
         vk::AccessFlagBits2::eColorAttachmentRead |
@@ -802,6 +864,8 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
     const auto insert = [&](Access access) {
         if (BbToggle::Disabled(BbToggle::AccessMemo)) {
             barrier_tracker.InsertRange(range, access);
+            submission_ranges[range.resource] +=
+                boost::icl::interval<u64>::closed(range.range_start, range.range_end);
             return;
         }
         u64 hash = range.resource ^ range.range_start * 0x9E3779B97F4A7C15ull ^
@@ -814,6 +878,8 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
             return;
         }
         barrier_tracker.InsertRange(range, access);
+        submission_ranges[range.resource] +=
+            boost::icl::interval<u64>::closed(range.range_start, range.range_end);
         memo = {range.resource, range.range_start, range.range_end, access_epoch, u32(access)};
     };
     if (src_access & WRITE_MASK) {

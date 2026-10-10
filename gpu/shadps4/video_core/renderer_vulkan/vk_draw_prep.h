@@ -158,6 +158,11 @@ public:
         return current;
     }
 
+    /// GPU-thread diagnostic view of the immutable bytes copied at submission time.
+    [[nodiscard]] std::span<const u32> CurrentCommands() const {
+        return current ? std::span<const u32>{current->commands} : std::span<const u32>{};
+    }
+
 private:
     u32 current_draw = 0;
     u64 used = 0, unused = 0;

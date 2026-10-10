@@ -260,6 +260,7 @@ Frame* Presenter::PrepareLastFrame() {
         if (result == vk::Result::eTimeout) {
             continue;
         }
+        AwaitDeviceLostReports(result);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
     }
@@ -319,7 +320,8 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 // bbport: raw copy of an image for BB_FRAME_DUMP_TRIGGER, written once the GPU is done.
 static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
-                    int index, u32 bytes_per_pixel = 4) {
+                    int index, u32 bytes_per_pixel = 4,
+                    vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor) {
     const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                        .size = VkDeviceSize(w) * h * bytes_per_pixel,
                                        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -334,7 +336,7 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
         return;
     }
     cmdbuf.copyImageToBuffer(image, layout, buffer,
-                             vk::BufferImageCopy{.imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                             vk::BufferImageCopy{.imageSubresource = {aspect, 0, 0, 1},
                                                  .imageExtent = {w, h, 1}});
     const char* dir = std::getenv("BB_DUMP_DIR");
     char path[512];
@@ -432,6 +434,21 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     auto& image = texture_cache.GetImage(id);
                     const bool supported = image.info.num_bits == 32 ||
                         image.info.pixel_format == vk::Format::eR16G16B16A16Sfloat;
+                    if (image.info.props.is_depth && image.info.props.has_stencil &&
+                        image.info.num_samples == 1 && image.info.size.depth == 1) {
+                        // The stencil plane, one byte per pixel (UI clipping masks).
+                        runtime.Transit(&image, vk::ImageLayout::eTransferSrcOptimal,
+                                        vk::PipelineStageFlagBits2::eTransfer,
+                                        vk::AccessFlagBits2::eTransferRead);
+                        runtime.FlushBarriers();
+                        char name[128];
+                        std::snprintf(name, sizeof(name), "stencil_%llx",
+                                      static_cast<unsigned long long>(address));
+                        DumpRaw(instance, draw_scheduler, cmdbuf, image.GetImage(),
+                                vk::ImageLayout::eTransferSrcOptimal, image.info.size.width,
+                                image.info.size.height, name, frame_dump_index, 1,
+                                vk::ImageAspectFlagBits::eStencil);
+                    }
                     if (supported && !image.info.props.is_depth && !image.info.props.is_block &&
                         image.info.num_samples == 1 && image.info.size.depth == 1) {
                         runtime.Transit(&image, vk::ImageLayout::eTransferSrcOptimal,
@@ -822,6 +839,7 @@ Frame* Presenter::GetRenderFrame() {
 
     // Wait for the presentation to be finished so all frame resources are free
     while (wait() != vk::Result::eSuccess) {
+        AwaitDeviceLostReports(result);
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
                    "Device lost during waiting for a frame");
         // Retry if the waiting times out

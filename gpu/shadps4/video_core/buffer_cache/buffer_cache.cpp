@@ -628,7 +628,7 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
         },
         [&] { src_buffer = UploadCopies(arena, copies, total_size_bytes); });
 
-    if (src_buffer) {
+    if (src_buffer && !runtime.CopyBufferBeforePass(src_buffer, arena, copies)) {
         runtime.CopyBuffer(src_buffer, arena, copies);
     }
     if (is_texel_buffer && !is_written) {

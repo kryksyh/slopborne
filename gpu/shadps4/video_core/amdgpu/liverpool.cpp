@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <pthread.h>
 #ifndef _WIN32
 #include <sys/resource.h>
@@ -317,21 +319,22 @@ void RunDmaData(Vulkan::Rasterizer& rasterizer, const u8* data) {
 }
 
 void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
+    // The guest reuses the flipped frame's memory (UI vertices) once it sees the flip.
+    rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
 }
 
 void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
-    const auto* header = reinterpret_cast<const PM4Header*>(data);
     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
     // Copies deferred to the recording thread, and fences deferred to it (RecorderFences),
     // precede writes the guest sees.
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     BbWriteLog::Note(write_data->Address<u64>(), write_data->data,
-                     (header->type3.count.Value() - 2) * sizeof(u32), BbWriteLog::WriteData);
+                     write_data->Size(), BbWriteLog::WriteData);
     std::memcpy(write_data->Address<u64*>(), write_data->data,
-                (header->type3.count.Value() - 2) * sizeof(u32));
+                write_data->Size());
 }
 
 void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
@@ -375,7 +378,8 @@ void Liverpool::NotePendingFences(const auto& event) {
     }
 }
 
-void Liverpool::NotePendingWrite(const PM4CmdWriteData& write_data, u32 num_bytes) {
+void Liverpool::NotePendingWrite(const PM4CmdWriteData& write_data) {
+    const u32 num_bytes = write_data.Size();
     if (num_bytes > sizeof(u64)) {
         return; // labels are small; larger writes are not waited on
     }
@@ -717,6 +721,21 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     if (draw_prep) {
         draw_prep->BeginSubmission(seq, regs, gfx_reg_checksum);
     }
+    // Observe packet lifetime without changing the bytes the command processor executes.
+    // Prefer the preparation workers' immutable submit-time copy. Nested IBs (or disabled
+    // preparation) can only be compared with a snapshot from when processing began.
+    static const char* fault_dir = std::getenv("BB_PM4_FAULT_DIR");
+    const auto original_dcb = dcb;
+    BbWriteLog::NoteIntent(reinterpret_cast<u64>(dcb.data()), &seq, sizeof(seq), BbWriteLog::DcbStart);
+    std::span<const u32> submitted_commands;
+    std::vector<u32> started_commands;
+    if (fault_dir && *fault_dir && dcb.size_bytes() <= 16 * 1024 * 1024) {
+        if (draw_prep) submitted_commands = draw_prep->CurrentCommands();
+        if (submitted_commands.size() != dcb.size()) {
+            started_commands.assign(dcb.begin(), dcb.end());
+            submitted_commands = started_commands;
+        }
+    }
     static const bool dcb_stats = EmulatorSettingsImpl::Flag("BB_DCB_STATS", false);
     const int dcb_depth = g_dcb_depth;
     if (dcb_stats) {
@@ -735,6 +754,43 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         RESUME_GFX(ce_task);
     }
 
+    const auto capture_fault = [&](const char* reason, u32 packet_words, u32 observed_header) {
+        if (submitted_commands.empty()) return;
+        const auto stamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        const auto directory = std::filesystem::path(fault_dir) /
+                               fmt::format("pm4_{}_{}", stamp, seq);
+        std::error_code ec;
+        std::filesystem::create_directories(directory.parent_path(), ec);
+        if (!ec && std::filesystem::create_directory(directory, ec) && !ec) {
+            const size_t packet_offset = dcb.data() - original_dcb.data();
+            const std::vector<u32> current_commands(original_dcb.begin(), original_dcb.end());
+            size_t different_words = 0;
+            for (size_t i = 0; i < original_dcb.size(); ++i)
+                different_words += current_commands[i] != submitted_commands[i];
+            const auto write = [&](const char* name, std::span<const u32> words) {
+                std::ofstream out(directory / name, std::ios::binary);
+                out.write(reinterpret_cast<const char*>(words.data()), words.size_bytes());
+                return bool(out);
+            };
+            const bool initial_written = write("initial.bin", submitted_commands);
+            const bool current_written = write("current.bin", current_commands);
+            std::ofstream metadata(directory / "metadata.txt");
+            metadata << fmt::format(
+                "fault_reason={}\nobserved_header={:#x}\nsnapshot_phase={}\n"
+                "base={:#x}\nseq={}\npacket_offset_words={}\n"
+                "packet_words={}\nremaining_words={}\ndifferent_words={}\n"
+                "initial_header={:#x}\ncurrent_header={:#x}\ncomplete_binary_writes={}\n",
+                reason, observed_header, started_commands.empty() ? "submit" : "processing_start",
+                reinterpret_cast<uintptr_t>(original_dcb.data()), seq, packet_offset,
+                packet_words, dcb.size(), different_words, submitted_commands[packet_offset],
+                current_commands[packet_offset], initial_written && current_written);
+            std::printf("PM4 fault snapshot: %s (%zu words changed)\n",
+                        directory.string().c_str(), different_words);
+            bbgpu_dump_recent_small_writes(120);
+            std::fflush(stdout);
+        }
+    };
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
     while (!dcb.empty()) {
         ProcessCommands();
@@ -744,9 +800,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 
         switch (type) {
         default:
+            capture_fault("unsupported_packet_type", 0, header->raw);
             UNREACHABLE_MSG("Wrong PM4 type {}", type);
             break;
         case 0:
+            capture_fault("unimplemented_type0", header->type0.NumWords() + 1, header->raw);
             UNREACHABLE_MSG("Unimplemented PM4 type 0, base reg: {}, size: {}",
                             header->type0.base.Value(), header->type0.NumWords());
             break;
@@ -757,6 +815,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         case 3:
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
+            if (count + 1 > dcb.size()) {
+                capture_fault("truncated_type3", count + 1, header->raw);
+            }
             ASSERT_MSG(count + 1 <= dcb.size(),
                        "Truncated PM4 packet at {:#x}: opcode {:#x}, {} words, {} remaining",
                        reinterpret_cast<uintptr_t>(header), u32(opcode), count + 1, dcb.size());
@@ -1173,26 +1234,28 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::WriteData: {
+                ASSERT_MSG(count >= 3, "WRITE_DATA lacks control/address words");
                 // RunInOrder may publish the write before returning. Pending-write
                 // bookkeeping must not read command memory the guest can now reuse.
                 const boost::container::small_vector<u32, 16> packet(dcb.begin(),
                                                                      dcb.begin() + count + 1);
                 const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(packet.data());
+                const u32 data_size = write_data->Size();
                 ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
                 ASSERT(!write_data->wr_one_addr.Value());
                 if (rasterizer) {
                     // In order with the draws (on the draw recording thread when in use).
                     BbWriteLog::NoteIntent(write_data->Address<u64>(), write_data->data,
-                                           (count - 2) * sizeof(u32),
+                                           data_size,
                                            BbWriteLog::WriteDataIntent);
                     if (rasterizer->RunInOrder(&RunWriteData, packet.data(), (count + 1) * sizeof(u32),
                                                BbToggle::PipelinedMemoryWrites)) {
-                        NotePendingWrite(*write_data, (count - 2) * sizeof(u32));
+                        NotePendingWrite(*write_data);
                         rasterizer->NotePendingGpuWrite(write_data->Address<VAddr>(),
-                                                        (count - 2) * sizeof(u32));
+                                                        data_size);
                     }
                 } else {
-                    std::memcpy(write_data->Address<u64*>(), write_data->data, (count - 2) * 4);
+                    std::memcpy(write_data->Address<u64*>(), write_data->data, data_size);
                 }
                 break;
             }

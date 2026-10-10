@@ -52,13 +52,13 @@ bool Enabled() {
 }
 
 void NoteIntent(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
-    if (Mode() == 2) {
+    if (Mode() == 2 || Mode() == 3) {
         Record(address, data, size, source);
     }
 }
 
 void Note(std::uint64_t address, const void* data, std::uint64_t size, Source source) {
-    if (Enabled()) {
+    if (Mode() == 1 || Mode() == 3) {
         Record(address, data, size, source);
     }
 }
@@ -175,4 +175,27 @@ extern "C" void bbgpu_dump_guest_writes(void* ucontext) {
         }
     }
     std::fprintf(stderr, "Write log: %llu writes logged\n", (unsigned long long)n);
+}
+
+extern "C" void bbgpu_dump_recent_small_writes(unsigned max_entries) {
+    using namespace BbWriteLog;
+    if (Mode() != 3) {
+        return;
+    }
+    const char* sources[] = {"backing",       "WriteData",           "fence",          "EOP (decoded)",
+                             "WriteData (decoded)", "EOS (decoded)", "DCB start"};
+    const std::uint64_t now = __rdtsc();
+    const std::uint64_t h = head.load();
+    unsigned printed = 0;
+    for (std::uint64_t i = h; i-- > (h > Size ? h - Size : 0) && printed < max_entries;) {
+        const Entry& e = ring[i % Size];
+        if (e.size > 16) {
+            continue;
+        }
+        std::fprintf(stderr, "Write log: %s %#llx +%llu value %#llx tid %u, %.6f s before\n",
+                     e.source < 7 ? sources[e.source] : "?", (unsigned long long)e.address,
+                     (unsigned long long)e.size, (unsigned long long)e.first, e.tid,
+                     double(now - e.tsc) / 3.0e9);
+        ++printed;
+    }
 }

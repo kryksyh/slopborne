@@ -13,6 +13,7 @@
 #include "shader_recompiler/specialization.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
+#include "video_core/renderer_vulkan/vk_geometry_pipeline.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 
 template <>
@@ -93,6 +94,8 @@ struct PipelineSelection {
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     bool motion = false;
+    const GeometryReplayStages* geometry{};
+    bool allow_geometry = false;
     DrawIndirectParams draw_indirect_params{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
 };
@@ -128,7 +131,8 @@ public:
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
 
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},
-                                                const PreparedDraw* prepared = nullptr);
+                                                const PreparedDraw* prepared = nullptr,
+                                                bool allow_geometry = true);
 
     /// bbport: worker side of draw preparation: selects the pipeline key for `sel.regs` without
     /// creating anything. False when a program or permutation does not exist yet.
@@ -164,6 +168,9 @@ private:
     bool RefreshGraphicsKey(PipelineSelection& sel);
     bool RefreshGraphicsStages(PipelineSelection& sel);
     bool RefreshComputeKey();
+    const GeometryKernel* GetGeometryKernel(PipelineSelection& sel, Shader::HwStage stage,
+                                            Shader::SwStage logical);
+    bool RefreshGeometryReplay(PipelineSelection& sel, Shader::Backend::Bindings binding);
 
     void DumpShader(std::span<const u32> code, u64 hash, Shader::HwStage stage, size_t perm_idx,
                     std::string_view ext);
@@ -188,6 +195,8 @@ private:
     vk::UniquePipelineLayout pipeline_layout;
     Shader::Profile profile{};
     Shader::Pools pools;
+    std::vector<std::unique_ptr<GeometryKernel>> geometry_kernels;
+    std::vector<std::unique_ptr<GeometryReplayStages>> geometry_replays;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     /// bbport: exclusive for program/permutation insertions, shared for worker lookups.
     std::shared_mutex programs_mutex;

@@ -7,7 +7,7 @@
 #include <cstdint>
 
 namespace BbWriteLog {
-enum Source : std::uint32_t { Backing, WriteData, Fence, FenceIntent, WriteDataIntent, EosIntent };
+enum Source : std::uint32_t { Backing, WriteData, Fence, FenceIntent, WriteDataIntent, EosIntent, DcbStart };
 bool Enabled();
 /// BB_WRITE_LOG=1: at the write itself (changes the timing of those writes).
 void Note(std::uint64_t address, const void* data, std::uint64_t size, Source source);
@@ -17,3 +17,5 @@ void NoteIntent(std::uint64_t address, const void* data, std::uint64_t size, Sou
 }
 
 extern "C" void bbgpu_dump_guest_writes(void* ucontext);
+/// BB_WRITE_LOG=3: prints the latest small writes and intents (fences, labels, DCB starts).
+extern "C" void bbgpu_dump_recent_small_writes(unsigned max_entries);

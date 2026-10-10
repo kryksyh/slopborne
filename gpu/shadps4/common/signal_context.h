@@ -13,6 +13,10 @@ void* GetRip(void* ctx);
 
 void IncrementRip(void* ctx, u64 length);
 
+// x86 encoding order: rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi, r8..r15.
+// Returns null for unsupported architectures or an invalid register index.
+u64* GetX64GprPointer(void* ctx, u8 index);
+
 bool IsWriteError(void* ctx);
 
 } // namespace Common

@@ -33,8 +33,9 @@ GraphicsPipeline::GraphicsPipeline(
     vk::PipelineCache pipeline_cache, std::span<const Shader::Info*, MaxShaderStages> infos,
     std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader_,
-    std::span<const vk::ShaderModule> modules, SerializationSupport& sdata, bool preloading)
-    : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, key{key_},
+    std::span<const vk::ShaderModule> modules, SerializationSupport& sdata, bool preloading,
+    const GeometryReplayStages* geometry_)
+    : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, geometry{geometry_}, key{key_},
       fetch_shader{std::move(fetch_shader_)} {
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
@@ -400,8 +401,17 @@ GraphicsPipeline::GraphicsPipeline(
     };
 
     // Required by spec unless VK_EXT_extended_dynamic_state3 is supported.
-    // In practice, we use dynamic state for all of it.
-    constexpr vk::PipelineDepthStencilStateCreateInfo depth_stencil_info = {};
+    // In practice, we use dynamic state for all of it. MoltenVK still decides from the static
+    // state whether a pipeline without color attachments rasterizes: with tests off it drops
+    // stencil-only draws (HUD bar masks), so the tests the attachments allow are left on.
+    const bool has_depth = key.z_format != AmdGpu::DepthBuffer::ZFormat::Invalid;
+    const bool has_stencil = key.stencil_format != AmdGpu::DepthBuffer::StencilFormat::Invalid;
+    const vk::PipelineDepthStencilStateCreateInfo depth_stencil_info = {
+        .depthTestEnable = has_depth,
+        .depthWriteEnable = has_depth,
+        .depthCompareOp = vk::CompareOp::eAlways,
+        .stencilTestEnable = has_stencil,
+    };
 
     const vk::GraphicsPipelineCreateInfo pipeline_info = {
         .pNext = &pipeline_rendering_ci,
@@ -413,8 +423,7 @@ GraphicsPipeline::GraphicsPipeline(
         .pViewportState = &viewport_info,
         .pRasterizationState = &raster_chain.get(),
         .pMultisampleState = &sdata.multisampling,
-        .pDepthStencilState =
-            !instance.IsExtendedDynamicState3Supported() ? &depth_stencil_info : nullptr,
+        .pDepthStencilState = &depth_stencil_info,
         .pColorBlendState = &color_blending,
         .pDynamicState = &dynamic_info,
         .layout = *pipeline_layout,

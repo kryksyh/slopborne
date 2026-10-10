@@ -800,6 +800,22 @@ public:
     /// submission that reads them. Waits for all.
     void WaitHostCopies();
 
+    /// bbport: records `func(cmdbuf)` on the calling thread into a command buffer submitted
+    /// before the current one (the upload prologue): it runs before every command of this
+    /// submission, with barriers to earlier submissions and to everything after it.
+    template <typename Func>
+    void RecordPrologue(Func&& func) {
+        std::scoped_lock lk{prologue_mutex};
+        if (!prologue_cmdbuf) {
+            BeginPrologue();
+        }
+        func(prologue_cmdbuf);
+    }
+
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
+    }
+
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
@@ -877,6 +893,8 @@ public:
 private:
     void AllocateWorkerCommandBuffers();
 
+    void BeginPrologue();
+
     std::unique_ptr<RecordChunk> AcquireChunk();
 
     void RecorderThread(std::stop_token stoken);
@@ -889,6 +907,9 @@ private:
     const Instance& instance;
     Semaphore work_semaphore;
     CommandPool command_pool;
+    CommandPool prologue_pool;
+    vk::CommandBuffer prologue_cmdbuf{};
+    std::mutex prologue_mutex;
     DynamicState dynamic_state;
     SubmitFunc on_submit{};
     vk::CommandBuffer current_cmdbuf;
@@ -907,6 +928,9 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    RenderState ended_state{};
+    void* ended_by{};
+    void* ended_by_caller{};
     // bbport: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::vector<std::unique_ptr<RecordChunk>> full_chunks;

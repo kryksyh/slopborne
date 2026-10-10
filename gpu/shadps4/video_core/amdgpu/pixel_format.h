@@ -356,7 +356,9 @@ constexpr NumberConversion MapNumberConversion(const NumberFormat num_fmt,
         case DataFormat::Format16_16_16_16:
             return NumberConversion::Sint16ToSnormNz;
         default:
-            UNREACHABLE_MSG("data_fmt = {}", u32(data_fmt));
+            // Not a valid hardware combination: seen in garbage or unused sharps (32_32 while
+            // the camera turns), which must not abort the game.
+            return NumberConversion::None;
         }
     }
     default:

@@ -3,6 +3,9 @@
 
 #include <thread>
 #include <algorithm>
+#include <chrono>
+#include <map>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
@@ -27,7 +30,8 @@ namespace Vulkan {
 std::mutex Scheduler::submit_mutex;
 
 Scheduler::Scheduler(const Instance& instance, bool threaded_recording)
-    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore} {
+    : instance{instance}, work_semaphore{instance}, command_pool{instance, &work_semaphore},
+      prologue_pool{instance, &work_semaphore} {
     // bbport: BB_VK_RECORD_THREAD=0 records on the calling thread.
     const char* env = std::getenv("BB_VK_RECORD_THREAD");
     if (threaded_recording && !(env && env[0] == '0')) {
@@ -55,9 +59,89 @@ Scheduler::~Scheduler() {
 #endif
 }
 
+// BB_PASS_STATS=1: counts render passes and, per caller of EndRendering, the passes reopened on
+// the same attachments right after. On tile-based GPUs each such split stores and reloads every
+// attachment. Offsets resolve with `atos -o bb-probe -l <base>`.
+static const bool pass_stats_enabled = [] {
+    const char* env = std::getenv("BB_PASS_STATS");
+    return env && env[0] == '1';
+}();
+
+static bool SameAttachments(const RenderState& a, const RenderState& b) {
+    if (a.num_color_attachments != b.num_color_attachments ||
+        a.depth_stencil_attachment.image_view != b.depth_stencil_attachment.image_view) {
+        return false;
+    }
+    for (u32 i = 0; i < a.num_color_attachments; ++i) {
+        if (a.color_attachments[i].image_view != b.color_attachments[i].image_view) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void CountPass(void* reopened_after, void* caller, const RenderState& state) {
+    static std::mutex mutex;
+    static std::map<std::pair<void*, void*>, std::array<u64, 2>> reopens;
+    static u64 passes, reopened, reopened_bytes;
+    static auto last = std::chrono::steady_clock::now();
+    std::scoped_lock lk{mutex};
+    ++passes;
+    if (reopened_after) {
+        // Store + reload of every attachment, 4 bytes per pixel each (8 for depth-stencil).
+        const u64 bpp = 4ull * state.num_color_attachments +
+                        (state.depth_stencil_attachment.image_view ? 8 : 0);
+        const u64 bytes = 2ull * state.width * state.height * bpp;
+        ++reopened;
+        reopened_bytes += bytes;
+        auto& entry = reopens[{reopened_after, caller}];
+        ++entry[0];
+        entry[1] += bytes;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - last).count();
+    if (seconds < 5.0) {
+        return;
+    }
+    std::vector<std::tuple<u64, u64, void*, void*>> top;
+    for (const auto& [key, value] : reopens) {
+        top.emplace_back(value[1], value[0], key.first, key.second);
+    }
+    std::ranges::sort(top, std::greater{});
+    Dl_info self{};
+    dladdr(reinterpret_cast<void*>(&CountPass), &self);
+    const auto offset = [&](void* address) {
+        return static_cast<unsigned long>(reinterpret_cast<uintptr_t>(address) -
+                                          reinterpret_cast<uintptr_t>(self.dli_fbase));
+    };
+    std::printf("Pass stats: %.0f passes/s, %.0f reopened on the same attachments/s, %.0f MB/s "
+                "attachment traffic (base %p)\n",
+                passes / seconds, reopened / seconds, reopened_bytes / seconds / 1e6,
+                self.dli_fbase);
+    for (size_t i = 0; i < std::min<size_t>(top.size(), 12); ++i) {
+        const auto& [bytes, count, end, from] = top[i];
+        std::printf("  reopened after +0x%lx from +0x%lx: %.0f/s, %.0f MB/s\n", offset(end),
+                    offset(from), count / seconds, bytes / seconds / 1e6);
+    }
+    std::fflush(stdout);
+    reopens.clear();
+    passes = reopened = reopened_bytes = 0;
+    last = now;
+}
+
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
         return;
+    }
+    if (pass_stats_enabled) {
+        const bool ending = is_rendering;
+        EndRendering();
+        if (ending) {
+            ended_by = nullptr; // switching attachments, not a split
+        }
+        const bool same = ended_by && SameAttachments(ended_state, new_state);
+        CountPass(same ? ended_by : nullptr, ended_by_caller, new_state);
+        ended_by = nullptr;
     }
     EndRendering();
     is_rendering = true;
@@ -128,6 +212,11 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
 void Scheduler::EndRendering() {
     if (!is_rendering) {
         return;
+    }
+    if (pass_stats_enabled) {
+        ended_state = render_state;
+        ended_by = __builtin_return_address(0);
+        ended_by_caller = __builtin_return_address(1);
     }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
@@ -394,6 +483,19 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 #endif
 }
 
+void Scheduler::BeginPrologue() {
+    prologue_cmdbuf = prologue_pool.Commit();
+    Check(prologue_cmdbuf.begin({.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit}));
+    // Earlier submissions may still read or write what the prologue overwrites.
+    const vk::MemoryBarrier2 before = {
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferWrite | vk::AccessFlagBits2::eTransferRead,
+    };
+    prologue_cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &before});
+}
+
 void Scheduler::SubmitExecution(SubmitInfo& info) {
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
@@ -420,6 +522,25 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     WaitHostCopies();
     Check(current_cmdbuf.end());
 
+    std::array<vk::CommandBuffer, 2> cmdbufs{};
+    u32 num_cmdbufs = 0;
+    {
+        std::scoped_lock lk{prologue_mutex};
+        if (prologue_cmdbuf) {
+            const vk::MemoryBarrier2 after = {
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            };
+            prologue_cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &after});
+            Check(prologue_cmdbuf.end());
+            cmdbufs[num_cmdbufs++] = prologue_cmdbuf;
+            prologue_cmdbuf = vk::CommandBuffer{};
+        }
+    }
+    cmdbufs[num_cmdbufs++] = current_cmdbuf;
+
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
 
@@ -443,14 +564,15 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         .waitSemaphoreCount = info.num_wait_semas,
         .pWaitSemaphores = info.wait_semas.data(),
         .pWaitDstStageMask = wait_stage_masks.data(),
-        .commandBufferCount = 1U,
-        .pCommandBuffers = &current_cmdbuf,
+        .commandBufferCount = num_cmdbufs,
+        .pCommandBuffers = cmdbufs.data(),
         .signalSemaphoreCount = info.num_signal_semas,
         .pSignalSemaphores = info.signal_semas.data(),
     };
 
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    AwaitDeviceLostReports(submit_result);
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();

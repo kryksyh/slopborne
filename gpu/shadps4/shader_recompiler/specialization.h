@@ -143,7 +143,7 @@ struct StageSpecialization {
                          }
                          spec.num_conversion = sharp.GetNumberConversion();
                          spec.num_bindings = desc.NumBindings(*info);
-                     });
+                     }, true);
         ForEachSharp(binding, fmasks, info->fmasks,
                      [](auto& spec, const auto& desc, AmdGpu::Image sharp) {
                          spec.width = sharp.width;
@@ -175,15 +175,16 @@ struct StageSpecialization {
         }
     }
 
-    void ForEachSharp(u32& binding, auto& spec_list, auto& desc_list, auto&& func) {
+    void ForEachSharp(u32& binding, auto& spec_list, auto& desc_list, auto&& func,
+                      bool specialize_null = false) {
         for (const auto& desc : desc_list) {
             auto& spec = spec_list.emplace_back();
             const auto sharp = desc.GetSharp(*info);
-            if (!sharp) {
+            if (!sharp && !specialize_null) {
                 binding++;
                 continue;
             }
-            bitset.set(binding++);
+            bitset.set(binding++, bool(sharp));
             func(spec, desc, sharp);
         }
     }
@@ -213,11 +214,19 @@ struct StageSpecialization {
             return false;
         }
 
+        // A missing texture still has a typed shader interface and a real placeholder
+        // descriptor on backends without null descriptors. Reusing a 2D-array module
+        // for a missing 2D texture binds an incompatible native texture type.
+        if (images != other.images) {
+            return false;
+        }
+
         // For VS which only generates geometry and doesn't have any inputs, its start
         // bindings still may change as they depend on previously processed FS. The check below
-        // handles this case and prevents generation of redundant permutations. This is also safe
-        // for other types of shaders with no bindings.
-        if (bitset.none() && other.bitset.none()) {
+        // handles this case and prevents generation of redundant permutations. Missing
+        // resources still have bindings, so only genuinely empty interfaces qualify.
+        if (bitset.none() && other.bitset.none() && buffers.empty() && other.buffers.empty() &&
+            images.empty() && other.images.empty() && samplers.empty() && other.samplers.empty()) {
             return true;
         }
 
@@ -231,12 +240,6 @@ struct StageSpecialization {
                 return false;
             }
         }
-        for (u32 i = 0; i < images.size(); i++) {
-            if (other.bitset[binding++] && images[i] != other.images[i]) {
-                return false;
-            }
-        }
-
         for (u32 i = 0; i < samplers.size(); i++) {
             if (samplers[i] != other.samplers[i]) {
                 return false;

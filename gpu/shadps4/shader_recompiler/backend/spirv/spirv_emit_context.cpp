@@ -3,6 +3,7 @@
 
 #include "common/assert.h"
 #include "common/div_ceil.h"
+#include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/attribute.h"
@@ -69,8 +70,8 @@ void Name(EmitContext& ctx, Id object, std::string_view format_str, Args&&... ar
 } // Anonymous namespace
 
 EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_info_, Info& info_,
-                         Bindings& binding_)
-    : Sirit::Module(profile_.supported_spirv), info{info_}, runtime_info{runtime_info_},
+                         Bindings& binding_, GeometryComputeLayout* geometry_)
+    : Sirit::Module(profile_.supported_spirv), geometry{geometry_}, info{info_}, runtime_info{runtime_info_},
       profile{profile_}, hw_stage{info.hw_stage}, sw_stage{info.sw_stage}, binding{binding_} {
     if (info.uses_dma || VertexMotion()) {
         SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
@@ -85,6 +86,7 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
     DefineSharedMemory();
     DefineBuffers();
     DefineImagesAndSamplers();
+    if (geometry) DefineGeometryCompute();
     DefineFunctions();
 }
 
@@ -294,6 +296,22 @@ void EmitContext::DefineAmdPerVertexAttribs() {
     }
 }
 
+void EmitContext::DefineFlatCornerAttribs() {
+    if (!profile.lower_per_vertex_to_flat_corners) {
+        return;
+    }
+    for (s32 i = 0; i < runtime_info.hw.fs.num_inputs; i++) {
+        if (!Sirit::ValidId(flat_corner_inputs[i][0])) {
+            continue;
+        }
+        auto& param = input_params[i];
+        for (u32 corner = 0; corner < 3; ++corner) {
+            param.id_array[corner] = OpLoad(F32[4], flat_corner_inputs[i][corner]);
+        }
+        param.is_loaded = true;
+    }
+}
+
 void EmitContext::DefineWorkgroupIndex() {
     const Id workgroup_id_val{OpLoad(U32[3], workgroup_id)};
     const Id workgroup_x{OpCompositeExtract(U32[1], workgroup_id_val, 0)};
@@ -309,6 +327,11 @@ void EmitContext::DefineWorkgroupIndex() {
 }
 
 void EmitContext::DefineInputs() {
+    if (geometry) {
+        geometry_invocation = DefineVariable(U32[3], spv::BuiltIn::GlobalInvocationId,
+                                              spv::StorageClass::Input);
+        return;
+    }
     if (info.uses_lane_id) {
         subgroup_local_invocation_id = DefineVariable(
             U32[1], spv::BuiltIn::SubgroupLocalInvocationId, spv::StorageClass::Input);
@@ -451,6 +474,23 @@ void EmitContext::DefineInputs() {
             const u32 num_components = info.loads.NumComponents(param);
             const auto [primary, auxiliary] = info.fs_interpolation[i];
             const Id type = F32[num_components];
+            const bool flat_corners =
+                primary == Qualifier::PerVertex && profile.lower_per_vertex_to_flat_corners;
+            if (flat_corners) {
+                const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
+                ASSERT_MSG(bind_location < FlatCornerLocationStride,
+                           "Per-vertex input at location {}", bind_location);
+                for (u32 corner = 0; corner < 3; ++corner) {
+                    const Id corner_id =
+                        Name(DefineInput(F32[4], FlatCornerLocation(bind_location, corner)),
+                             fmt::format("fs_in_attr{}_corner{}", i, corner));
+                    Decorate(corner_id, spv::Decoration::Flat);
+                    flat_corner_inputs[i][corner] = corner_id;
+                }
+                input_params[i] = GetAttributeInfo(AmdGpu::NumberFormat::Float,
+                                                   flat_corner_inputs[i][0], 4, false, false, true);
+                continue;
+            }
             const Id attr_id = [&] {
                 const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
                 if (primary == Qualifier::PerVertex &&
@@ -615,6 +655,7 @@ void EmitContext::DefineVertexBlock() {
 }
 
 void EmitContext::DefineOutputs() {
+    if (geometry) return;
     switch (sw_stage) {
     case SwStage::Vertex: {
         DefineVertexBlock();

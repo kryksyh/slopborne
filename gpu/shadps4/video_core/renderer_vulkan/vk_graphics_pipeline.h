@@ -25,6 +25,7 @@ static constexpr u32 MaxVertexBufferCount = 32;
 class Instance;
 class Scheduler;
 class DescriptorHeap;
+struct GeometryReplayStages;
 
 template <typename T>
 using VertexInputs = boost::container::static_vector<T, MaxVertexBufferCount>;
@@ -98,12 +99,14 @@ public:
                      std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
                      std::optional<const Shader::Gcn::FetchShaderData> fetch_shader,
                      std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
-                     bool preloading);
+                     bool preloading, const GeometryReplayStages* geometry = nullptr);
     ~GraphicsPipeline();
 
     const std::optional<const Shader::Gcn::FetchShaderData>& GetFetchShader() const noexcept {
         return fetch_shader;
     }
+
+    const GeometryReplayStages* Geometry() const noexcept { return geometry; }
 
     const GraphicsPipelineKey& GetGraphicsKey() const {
         return key;
@@ -120,6 +123,7 @@ private:
     void BuildDescSetLayout(bool preloading);
 
 private:
+    const GeometryReplayStages* geometry{};
     GraphicsPipelineKey key;
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader{};
 };

@@ -9,16 +9,26 @@
 
 #include <atomic>
 #include <cstdio>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "common/types.h"
 
+namespace Shader {
+struct PushData;
+}
+namespace vk {
+struct WriteDescriptorSet;
+}
+
 namespace VideoCore {
 struct ImageInfo;
+struct Buffer;
 }
 
 namespace Vulkan {
+class Runtime;
 
 class FrameCapture {
 public:
@@ -49,7 +59,18 @@ public:
     static void Sampled(const VideoCore::ImageInfo& info, bool storage);
     /// Contents of a bound buffer (first 1 KiB), kept for small passes and a pass's first draw.
     static void Buffer(u64 stage_hash, u32 slot, VAddr address, const void* data, u64 size);
+    // Opt-in coherence diagnostic: capture GPU bytes and binding-time guest bytes
+    // without waiting on the GPU thread. Restrict to one shader and active captures.
+    static bool WantsGpuBuffer(u64 stage_hash);
+    static constexpr u64 MaxGpuBufferBytes = 64 * 1024;
+    static void GpuBuffer(Runtime& runtime, u64 stage_hash, u32 slot, VAddr address,
+                          const VideoCore::Buffer* source, u64 offset, u64 full_size,
+                          std::vector<u8> guest_bytes, const u8* staged_bytes = nullptr);
     static void Note(const char* text);
+    /// BB_CAPTURE_DRAW_HASH: exact host-side values sent for a matching direct draw.
+    static bool WantsDrawInputs(u64 vs_hash, u64 ps_hash);
+    static void DrawInputs(u64 vs_hash, u64 ps_hash, const Shader::PushData& push,
+                           std::span<const vk::WriteDescriptorSet> writes);
 
 private:
     enum : u32 { Idle, Armed, Recording };

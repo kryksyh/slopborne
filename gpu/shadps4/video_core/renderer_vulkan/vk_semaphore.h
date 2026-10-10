@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <thread>
 #include <queue>
@@ -14,6 +15,14 @@ namespace Vulkan {
 
 class Instance;
 class Scheduler;
+
+// Metal reports the command buffer that caused a device loss asynchronously, often after its
+// victims; aborting at once loses the culprit's error message.
+inline void AwaitDeviceLostReports(vk::Result result) {
+    if (result == vk::Result::eErrorDeviceLost) {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+}
 
 class Semaphore {
 public:

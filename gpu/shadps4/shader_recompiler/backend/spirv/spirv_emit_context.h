@@ -13,6 +13,7 @@
 #include "shader_recompiler/profile.h"
 
 namespace Shader::Backend::SPIRV {
+struct GeometryComputeLayout;
 
 using Sirit::Id;
 
@@ -39,14 +40,29 @@ struct VectorIds {
 class EmitContext final : public Sirit::Module {
 public:
     explicit EmitContext(const Profile& profile, const RuntimeInfo& runtime_info, Info& info,
-                         Bindings& binding);
+                         Bindings& binding, GeometryComputeLayout* geometry = nullptr);
     ~EmitContext();
 
     Id Def(const IR::Value& value);
 
     void DefineBufferProperties();
     void DefineAmdPerVertexAttribs();
+    void DefineFlatCornerAttribs();
     void DefineWorkgroupIndex();
+
+    GeometryComputeLayout* geometry{};
+    Id geometry_invocation{}, geometry_primitive{}, geometry_primitive_id{}, geometry_record{};
+    Id geometry_input{}, geometry_output{}, geometry_attributes{};
+    Id geometry_count{}, geometry_strip{};
+    Id export_vertex{}, export_instance{}, export_base_vertex{}, export_base_instance{};
+    void DefineGeometryCompute();
+    void DefineExportCompute();
+    void ExportPrologue();
+    void GeometryPrologue();
+    Id GeometryLoadAttribute(IR::Attribute attr, u32 comp, u32 vertex);
+    void GeometrySetAttribute(IR::Attribute attr, u32 comp, Id value);
+    void GeometryEmitVertex();
+    void GeometryEndPrimitive();
 
     [[nodiscard]] Id DefineInput(Id type, std::optional<u32> location = std::nullopt,
                                  std::optional<spv::BuiltIn> builtin = std::nullopt) {
@@ -473,6 +489,8 @@ public:
     Id input_attr_array;
     Id output_attr_array;
     std::array<SpirvAttribute, IR::NumParams> input_params{};
+    /// Per-vertex inputs lowered to flat corner inputs (lower_per_vertex_to_flat_corners).
+    std::array<std::array<Id, 3>, IR::NumParams> flat_corner_inputs{};
     std::array<SpirvAttribute, IR::NumParams> output_params{};
     std::array<SpirvAttribute, IR::NumRenderTargets> frag_outputs{};
 

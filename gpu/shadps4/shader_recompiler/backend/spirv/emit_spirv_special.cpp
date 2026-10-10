@@ -9,8 +9,10 @@
 namespace Shader::Backend::SPIRV {
 
 void EmitPrologue(EmitContext& ctx) {
+    if (ctx.geometry) ctx.GeometryPrologue();
     if (ctx.hw_stage == HwStage::Fragment) {
         ctx.DefineAmdPerVertexAttribs();
+        ctx.DefineFlatCornerAttribs();
     }
     if (ctx.info.loads.Get(IR::Attribute::WorkgroupIndex)) {
         ctx.DefineWorkgroupIndex();
@@ -218,10 +220,12 @@ void EmitDiscardCond(EmitContext& ctx, Id condition) {
 }
 
 void EmitEmitVertex(EmitContext& ctx) {
+    if (ctx.geometry) return ctx.GeometryEmitVertex();
     ctx.OpEmitVertex();
 }
 
 void EmitEmitPrimitive(EmitContext& ctx) {
+    if (ctx.geometry) return ctx.GeometryEndPrimitive();
     ctx.OpEndPrimitive();
 }
 

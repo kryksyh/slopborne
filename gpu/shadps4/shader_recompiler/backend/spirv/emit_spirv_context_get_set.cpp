@@ -80,6 +80,7 @@ Id EmitReadConstBuffer(EmitContext& ctx, u32 handle, Id index) {
 }
 
 Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
+    if (ctx.geometry) return ctx.GeometryLoadAttribute(attr, comp, index);
     if (IR::IsParam(attr)) {
         const u32 param_index{u32(attr) - u32(IR::Attribute::Param0)};
         const auto& param{ctx.input_params.at(param_index)};
@@ -217,12 +218,16 @@ Id EmitGetAttributeU1(EmitContext& ctx, IR::Attribute attr, u32 comp) {
 Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     switch (attr) {
     case IR::Attribute::VertexId:
+        if (ctx.geometry) return ctx.export_vertex;
         return ctx.OpLoad(ctx.U32[1], ctx.vertex_index);
     case IR::Attribute::InstanceId:
+        if (ctx.geometry) return ctx.export_instance;
         return ctx.OpLoad(ctx.U32[1], ctx.instance_id);
     case IR::Attribute::BaseVertex:
+        if (ctx.geometry) return ctx.export_base_vertex;
         return ctx.OpLoad(ctx.U32[1], ctx.base_vertex);
     case IR::Attribute::BaseInstance:
+        if (ctx.geometry) return ctx.export_base_instance;
         return ctx.OpLoad(ctx.U32[1], ctx.base_instance);
     case IR::Attribute::WorkgroupIndex:
         return ctx.workgroup_index_id;
@@ -241,8 +246,10 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
     case IR::Attribute::RenderTargetIndex:
         return ctx.OpLoad(ctx.U32[1], ctx.output_layer);
     case IR::Attribute::PrimitiveId:
+        if (ctx.geometry) return ctx.geometry_primitive_id;
         return ctx.OpLoad(ctx.U32[1], ctx.primitive_id);
     case IR::Attribute::InvocationId:
+        if (ctx.geometry) return ctx.u32_zero_value;
         ASSERT(ctx.info.sw_stage == SwStage::Geometry ||
                ctx.info.sw_stage == SwStage::TessellationControl);
         return ctx.OpLoad(ctx.U32[1], ctx.invocation_id);
@@ -274,6 +281,7 @@ Id EmitGetAttributeU32(EmitContext& ctx, IR::Attribute attr, u32 comp) {
 }
 
 void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 element) {
+    if (ctx.geometry) return ctx.GeometrySetAttribute(attr, element, value);
     const auto op_store = [&](Id pointer) {
         const auto [component_type, is_integer] = OutputAttrComponentType(ctx, attr);
         if (is_integer) {

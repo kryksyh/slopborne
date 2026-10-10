@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Production shader backend: GPU readback with hardware robustness disabled.
 #include <array>
+#include <bit>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -12,18 +14,10 @@
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
-#include "../src/vulkan_portability.h"
-#define CHECK(call)                                                                                \
-    do {                                                                                           \
-        auto check_result = (call);                                                                \
-        if (check_result != VK_SUCCESS) {                                                          \
-            std::fprintf(stderr, "%s: Vulkan error %d\n", #call, int(check_result));               \
-            std::exit(1);                                                                          \
-        }                                                                                          \
-    } while (0)
-
+#include "shader_recompiler/specialization.h"
+#include "vulkan_readback.h"
 static std::vector<u32> shader(bool images, bool widths = false, bool shared = false, bool dma = false,
-                               bool readonly = false) {
+                               bool readonly = false, int arithmetic = 0) {
     using namespace Shader;
     Info info{};
     info.hw_stage = HwStage::Compute;
@@ -46,8 +40,10 @@ static std::vector<u32> shader(bool images, bool widths = false, bool shared = f
     }
     if (widths)
         info.buffers[0].used_types |= IR::Type::U8 | IR::Type::U16 | IR::Type::U64 | IR::Type::F32;
-    if (readonly)
+    if (readonly || arithmetic)
         info.buffers[0].is_written = false;
+    if (arithmetic)
+        info.buffers[0].used_types |= IR::Type::F32;
     if (images) {
         info.images.push_back({.is_written = true});
         info.has_storage_images = true;
@@ -95,6 +91,15 @@ static std::vector<u32> shader(bool images, bool widths = false, bool shared = f
         ir.StoreBufferU16(src, ir.Imm32(6u), ir.Imm16(65535), {});
         ir.StoreBufferU64(src, ir.Imm32(1u), ir.Imm64(0xffffffffffffffffULL), {});
         ir.StoreBufferF32(1, src, ir.Imm32(3u), ir.Imm32(123.0f), {});
+    } else if (arithmetic) {
+        const IR::F32 a{ir.LoadBufferF32(1, src, ir.Imm32(0u), {})};
+        const IR::F32 b{ir.LoadBufferF32(1, src, ir.Imm32(1u), {})};
+        const IR::F32 c{ir.LoadBufferF32(1, src, ir.Imm32(2u), {})};
+        save(0, ir.BitCast<IR::U32>(IR::F32{ir.FPAdd(a, b)}));
+        save(1, ir.BitCast<IR::U32>(IR::F32{ir.FPMul(a, b)}));
+        save(2, ir.BitCast<IR::U32>(IR::F32{ir.FPSub(a, b)}));
+        save(3, ir.BitCast<IR::U32>(IR::F32{ir.FPAdd(ir.FPMul(a, b), c)}));
+        save(4, ir.BitCast<IR::U32>(IR::F32{ir.FPFma(a, b, c)}));
     } else if (readonly) {
         save(0, ir.LoadBufferU32(1, src, ir.Imm32(2u), {}));
         save(1, ir.ReadConstBuffer(src, ir.Imm32(3u), {}));
@@ -136,6 +141,8 @@ static std::vector<u32> shader(bool images, bool widths = false, bool shared = f
     profile.supported_spirv = 0x00010600;
     profile.emulate_robustness = true;
     profile.bounded_buffer_reads = true;
+    profile.metal_inline_arithmetic = arithmetic == 2;
+    profile.support_fp32_signed_zero_inf_nan_preserve = arithmetic != 0;
     profile.sparse_page_shift = 16;
     profile.needs_buffer_offsets = true;
     profile.support_int8 = profile.support_int16 = profile.support_int64 = true;
@@ -148,303 +155,252 @@ static std::vector<u32> shader(bool images, bool widths = false, bool shared = f
     return Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings);
 }
 
-struct Gpu {
-    VkInstance instance{};
-    VkPhysicalDevice physical{};
-    VkDevice device{};
-    VkQueue queue{};
-    uint32_t family{};
-    VkCommandPool pool{};
-    VkBuffer buffers[4]{};
-    VkDeviceMemory allocations[4]{};
-    u32 *mapped[4]{};
-    VkImage image{};
-    VkDeviceMemory image_memory{};
-    VkImageView view{};
-    VkDescriptorSetLayout set_layout{};
-    VkDescriptorPool descriptors{};
-    VkDescriptorSet set{};
-    VkPipelineLayout layout{};
-    VkPipeline pipeline{};
-    u32 buffer_count;
-    Gpu(const std::vector<u32> &code, bool images, bool dma = false) : buffer_count(dma ? 4 : 3) {
-        VkApplicationInfo app{.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-                              .apiVersion = VK_API_VERSION_1_3};
-        VkInstanceCreateInfo ci{.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-                                .pApplicationInfo = &app};
-        bb_vulkan_portability_instance(&ci);
-        CHECK(vkCreateInstance(&ci, nullptr, &instance));
-        u32 count = 0;
-        CHECK(vkEnumeratePhysicalDevices(instance, &count, nullptr));
-        if (!count)
-            std::exit(1);
-        std::vector<VkPhysicalDevice> devices(count);
-        CHECK(vkEnumeratePhysicalDevices(instance, &count, devices.data()));
-        physical = devices[0];
-        vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, nullptr);
-        std::vector<VkQueueFamilyProperties> queues(count);
-        vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, queues.data());
-        while (family < count && !(queues[family].queueFlags & VK_QUEUE_COMPUTE_BIT))
-            ++family;
-        if (family == count)
-            std::exit(1);
-        const float priority = 1;
-        VkDeviceQueueCreateInfo qci{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                    .queueFamilyIndex = family,
-                                    .queueCount = 1,
-                                    .pQueuePriorities = &priority};
-        VkPhysicalDeviceVulkan12Features f12{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-            .storageBuffer8BitAccess = VK_TRUE,
-            .shaderInt8 = VK_TRUE,
-            .bufferDeviceAddress = VK_TRUE};
-        VkPhysicalDeviceVulkan11Features f11{
-            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-            .pNext = &f12,
-            .storageBuffer16BitAccess = VK_TRUE};
-        VkPhysicalDeviceFeatures features{.shaderStorageImageExtendedFormats = VK_TRUE,
-                                          .shaderStorageImageReadWithoutFormat = VK_TRUE,
-                                          .shaderStorageImageWriteWithoutFormat = VK_TRUE,
-                                          .shaderInt64 = VK_TRUE,
-                                          .shaderInt16 = VK_TRUE};
-        VkDeviceCreateInfo dci{.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-                               .pNext = &f11,
-                               .queueCreateInfoCount = 1,
-                               .pQueueCreateInfos = &qci,
-                               .pEnabledFeatures = &features};
-        bb_vulkan_portability_device(physical, &dci);
-        CHECK(vkCreateDevice(physical, &dci, nullptr, &device));
-        vkGetDeviceQueue(device, family, 0, &queue);
-        VkPhysicalDeviceProperties props;
-        vkGetPhysicalDeviceProperties(physical, &props);
-        std::printf("Robustness test GPU: %s (hardware robustness disabled)\n", props.deviceName);
-        for (int i = 0; i < buffer_count; ++i) {
-            VkBufferCreateInfo bi{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                                  .size = 4096,
-                                  .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT};
-            CHECK(vkCreateBuffer(device, &bi, nullptr, &buffers[i]));
-            VkMemoryRequirements req;
-            vkGetBufferMemoryRequirements(device, buffers[i], &req);
-            allocations[i] = allocate(req, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-            CHECK(vkBindBufferMemory(device, buffers[i], allocations[i], 0));
-            CHECK(vkMapMemory(device, allocations[i], 0, 4096, 0,
-                              reinterpret_cast<void **>(&mapped[i])));
-        }
-        if (images) {
-            VkImageCreateInfo ii{.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-                                 .imageType = VK_IMAGE_TYPE_2D,
-                                 .format = VK_FORMAT_R32G32B32A32_SFLOAT,
-                                 .extent = {1, 1, 1},
-                                 .mipLevels = 1,
-                                 .arrayLayers = 1,
-                                 .samples = VK_SAMPLE_COUNT_1_BIT,
-                                 .tiling = VK_IMAGE_TILING_OPTIMAL,
-                                 .usage = VK_IMAGE_USAGE_STORAGE_BIT |
-                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
-            CHECK(vkCreateImage(device, &ii, nullptr, &image));
-            VkMemoryRequirements req;
-            vkGetImageMemoryRequirements(device, image, &req);
-            image_memory = allocate(req, 0);
-            CHECK(vkBindImageMemory(device, image, image_memory, 0));
-            VkImageViewCreateInfo vi{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                     .image = image,
-                                     .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                                     .format = ii.format,
-                                     .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
-            CHECK(vkCreateImageView(device, &vi, nullptr, &view));
-        }
-        std::vector<VkDescriptorSetLayoutBinding> bindings;
-        for (u32 i = 0; i < buffer_count; ++i)
-            bindings.push_back(
-                {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
-        if (images)
-            bindings.push_back(
-                {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
-        VkDescriptorSetLayoutCreateInfo sl{.sType =
-                                               VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-                                           .bindingCount = u32(bindings.size()),
-                                           .pBindings = bindings.data()};
-        CHECK(vkCreateDescriptorSetLayout(device, &sl, nullptr, &set_layout));
-        VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, buffer_count},
-                                        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1}};
-        VkDescriptorPoolCreateInfo dpi{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-                                       .maxSets = 1,
-                                       .poolSizeCount = 2,
-                                       .pPoolSizes = sizes};
-        CHECK(vkCreateDescriptorPool(device, &dpi, nullptr, &descriptors));
-        VkDescriptorSetAllocateInfo da{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                       .descriptorPool = descriptors,
-                                       .descriptorSetCount = 1,
-                                       .pSetLayouts = &set_layout};
-        CHECK(vkAllocateDescriptorSets(device, &da, &set));
-        VkDescriptorBufferInfo infos[] = {
-            {buffers[0], 0, 12}, {buffers[1], 0, 4096}, {buffers[2], 0, 4096}, {buffers[3], 0, 4096}};
-        for (u32 i = 0; i < buffer_count; ++i) {
-            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                       .dstSet = set,
-                                       .dstBinding = i,
-                                       .descriptorCount = 1,
-                                       .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                       .pBufferInfo = &infos[i]};
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-        }
-        if (images) {
-            VkDescriptorImageInfo ii{.imageView = view, .imageLayout = VK_IMAGE_LAYOUT_GENERAL};
-            VkWriteDescriptorSet write{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                                       .dstSet = set,
-                                       .dstBinding = 3,
-                                       .descriptorCount = 1,
-                                       .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                                       .pImageInfo = &ii};
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-        }
-        VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(Shader::PushData)};
-        VkPipelineLayoutCreateInfo li{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-                                      .setLayoutCount = 1,
-                                      .pSetLayouts = &set_layout,
-                                      .pushConstantRangeCount = 1,
-                                      .pPushConstantRanges = &push};
-        CHECK(vkCreatePipelineLayout(device, &li, nullptr, &layout));
-        VkShaderModuleCreateInfo sm{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                                    .codeSize = code.size() * 4,
-                                    .pCode = code.data()};
-        VkShaderModule module;
-        CHECK(vkCreateShaderModule(device, &sm, nullptr, &module));
-        VkComputePipelineCreateInfo pi{
-            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                      .module = module,
-                      .pName = "main"},
-            .layout = layout};
-        CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pi, nullptr, &pipeline));
-        vkDestroyShaderModule(device, module, nullptr);
-        VkCommandPoolCreateInfo pci{.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-                                    .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-                                    .queueFamilyIndex = family};
-        CHECK(vkCreateCommandPool(device, &pci, nullptr, &pool));
-    }
-    VkDeviceMemory allocate(VkMemoryRequirements req, VkMemoryPropertyFlags flags) {
-        VkPhysicalDeviceMemoryProperties mem;
-        vkGetPhysicalDeviceMemoryProperties(physical, &mem);
-        u32 i = 0;
-        while (i < mem.memoryTypeCount && (!(req.memoryTypeBits & (1u << i)) ||
-                                           (mem.memoryTypes[i].propertyFlags & flags) != flags))
-            ++i;
-        if (i == mem.memoryTypeCount)
-            std::exit(1);
-        VkMemoryAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                                .allocationSize = req.size,
-                                .memoryTypeIndex = i};
-        VkDeviceMemory result;
-        CHECK(vkAllocateMemory(device, &ai, nullptr, &result));
-        return result;
-    }
-    void run(bool present, u32 offset = 0) {
-        for (u32 i = 0; i < buffer_count; ++i)
-            std::memset(mapped[i], 0, 4096);
-        const u32 data[] = {11, 22, 33, 44};
-        if (buffer_count == 3)
-            std::memcpy(mapped[0], data, sizeof(data));
-        for (int i = 0; i < buffer_count; ++i)
-            mapped[buffer_count - 1][i] = 1;
-        mapped[buffer_count - 1][0] = present;
-        mapped[buffer_count - 1][Shader::NUM_BUFFERS] = present;
-        VkCommandBufferAllocateInfo ai{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-                                       .commandPool = pool,
-                                       .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                                       .commandBufferCount = 1};
-        VkCommandBuffer cmd;
-        CHECK(vkAllocateCommandBuffers(device, &ai, &cmd));
-        VkCommandBufferBeginInfo begin{.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-        CHECK(vkBeginCommandBuffer(cmd, &begin));
-        if (image) {
-            VkImageMemoryBarrier b{.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                                   .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-                                   .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                                   .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                                   .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                   .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                                   .image = image,
-                                   .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-            VkClearColorValue clear{.float32 = {9, 9, 9, 9}};
-            vkCmdClearColorImage(cmd, image, VK_IMAGE_LAYOUT_GENERAL, &clear, 1,
-                                 &b.subresourceRange);
-            b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                                 &b);
-        }
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0,
-                                nullptr);
-        Shader::PushData push{};
-        push.buf_offsets[0] = offset;
-        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
-        vkCmdDispatch(cmd, 1, 1, 1);
-        if (image) {
-            VkMemoryBarrier before{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                                   .srcAccessMask =
-                                       VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                                   .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT};
-            vkCmdPipelineBarrier(
-                cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, nullptr, 0, nullptr);
-            VkBufferImageCopy region{.bufferOffset = 512,
-                                     .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
-                                     .imageExtent = {1, 1, 1}};
-            vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_GENERAL, buffers[1], 1, &region);
-        }
-        VkMemoryBarrier b{.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                          .srcAccessMask =
-                              VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
-                          .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &b, 0, nullptr, 0, nullptr);
-        CHECK(vkEndCommandBuffer(cmd));
-        VkSubmitInfo submit{.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                            .commandBufferCount = 1,
-                            .pCommandBuffers = &cmd};
-        CHECK(vkQueueSubmit(queue, 1, &submit, VK_NULL_HANDLE));
-        CHECK(vkQueueWaitIdle(queue));
-        vkFreeCommandBuffers(device, pool, 1, &cmd);
-    }
-    ~Gpu() {
-        vkDestroyCommandPool(device, pool, nullptr);
-        vkDestroyPipeline(device, pipeline, nullptr);
-        vkDestroyPipelineLayout(device, layout, nullptr);
-        vkDestroyDescriptorPool(device, descriptors, nullptr);
-        vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
-        if (view)
-            vkDestroyImageView(device, view, nullptr);
-        if (image)
-            vkDestroyImage(device, image, nullptr);
-        if (image_memory)
-            vkFreeMemory(device, image_memory, nullptr);
-        for (int i = 0; i < buffer_count; ++i) {
-            vkUnmapMemory(device, allocations[i]);
-            vkDestroyBuffer(device, buffers[i], nullptr);
-            vkFreeMemory(device, allocations[i], nullptr);
-        }
-        vkDestroyDevice(device, nullptr);
-        vkDestroyInstance(instance, nullptr);
-    }
-};
 static void expect(u32 actual, u32 expected, const char *label, u32 index) {
     if (actual != expected) {
         std::fprintf(stderr, "FAIL %s[%u]: %u != %u\n", label, index, actual, expected);
         std::exit(1);
     }
 }
+static int geometry_test(const char* dump_path, bool compile_only = false) {
+    using namespace Shader;
+    Info info{};
+    info.hw_stage = HwStage::Geometry;
+    info.sw_stage = SwStage::Geometry;
+    RuntimeInfo runtime{};
+    runtime.Initialize(info.hw_stage, info.sw_stage);
+    runtime.hw.gs.in_primitive = AmdGpu::PrimitiveType::PointList;
+    runtime.hw.gs.num_invocations = 1;
+    runtime.hw.gs.output_vertices = 3;
+    runtime.hw.gs.in_vertex_data_size = 8;
+    Common::ObjectPool<IR::Inst> pool;
+    IR::Block block(pool);
+    IR::IREmitter ir(block);
+    ir.Prologue();
+    for (u32 comp = 0; comp < 4; ++comp) {
+        info.stores.Set(IR::Attribute::Position0, comp);
+        info.stores.Set(IR::Attribute::Param0, comp);
+        ir.SetAttribute(IR::Attribute::Position0, ir.GetAttribute(IR::Attribute::Position0, comp, 0), comp);
+        ir.SetAttribute(IR::Attribute::Param0, ir.GetAttribute(IR::Attribute::Param0, comp, 0), comp);
+    }
+    info.loads.Set(IR::Attribute::PrimitiveId, 0);
+    ir.SetAttribute(IR::Attribute::Param0,
+                    ir.BitCast<IR::F32>(ir.GetAttributeU32(IR::Attribute::PrimitiveId)), 3);
+    const auto original_x = ir.GetAttribute(IR::Attribute::Position0, 0, 0);
+    for (u32 vertex = 0; vertex < 4; ++vertex) {
+        ir.SetAttribute(IR::Attribute::Position0, ir.FPAdd(original_x, ir.Imm32(float(vertex))), 0);
+        ir.EmitVertex(); // Fourth emit intentionally exceeds max_vertices.
+        if (vertex == 1) ir.EmitPrimitive();
+    }
+    IR::Program program(info);
+    program.blocks.push_back(&block);
+    program.syntax_list.push_back({.data = {.block = &block}, .type = IR::AbstractSyntaxNode::Type::Block});
+    program.syntax_list.push_back({.type = IR::AbstractSyntaxNode::Type::Return});
+    Profile profile{};
+    profile.supported_spirv = 0x00010600;
+    Backend::Bindings bindings{};
+    Backend::SPIRV::GeometryComputeLayout layout;
+    const auto code = Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings, &layout);
+    expect(layout.input_binding, 0, "geometry input binding", 0);
+    expect(layout.output_binding, 1, "geometry output binding", 0);
+    expect(layout.primitive_stride_dwords, 29, "geometry record size", 0);
+    if (dump_path) {
+        if (std::filesystem::exists(dump_path)) return 2;
+        std::ofstream file(dump_path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(code.data()), code.size() * 4);
+    }
+    if (compile_only) return 0;
+    Gpu gpu(code, false);
+    struct Case {u32 count, input_points, output_points, expected; bool short_header;};
+    const Case cases[] = {{3,4,3,3,false}, {0,4,3,0,false}, {100,2,3,2,false},
+                          {3,4,2,2,false}, {3,4,0,0,false}, {3,4,3,0,true}};
+    for (u32 test = 0; test < std::size(cases); ++test) {
+        const auto& c = cases[test];
+        std::vector<u32> input(c.short_header ? 2 : 4 + c.input_points * 8);
+        input[0] = c.count;
+        if (input.size() >= 4) input[1] = test == 0 ? 2 : 0;
+        if (!c.short_header)
+            for (u32 p = 0; p < c.input_points; ++p)
+                for (u32 component = 0; component < 8; ++component)
+                    input[4 + p * 8 + component] = std::bit_cast<u32>(float(10 * p + component));
+        gpu.run(true, 0, nullptr, input, std::max(4u, c.output_points * 29 * 4));
+        for (u32 p = 0; p < c.expected; ++p) {
+            const u32 base = p * 29;
+            expect(gpu.mapped[1][base], 3, "geometry vertex count", test);
+            expect(gpu.mapped[1][base + 1], 1, "geometry overflow flag", test);
+            for (u32 vertex = 0; vertex < 3; ++vertex) {
+                const u32 record = base + 2 + vertex * 9;
+                expect(gpu.mapped[1][record], vertex < 2 ? 0 : 2, "geometry strip start", test);
+                for (u32 component = 0; component < 8; ++component) {
+                    const float value = float(10 * p + component + (component == 0 ? vertex : 0));
+                    expect(gpu.mapped[1][record + 1 + component],
+                            component == 7 ? (test == 0 ? p % 2 : p) : std::bit_cast<u32>(value),
+                            "geometry attribute", test);
+                }
+            }
+        }
+        for (u32 word = c.expected * 29; word < 1024; ++word) {
+            const bool inactive_header = word / 29 < c.output_points && word % 29 < 2;
+            expect(gpu.mapped[1][word], inactive_header ? 0u : 0xdeadbeefu,
+                    "geometry retired header/unwritten guard", word);
+        }
+    }
+    std::puts("PASS: point-GS compute attributes, cuts, overflow and input/output bounds (6 cases)");
+    return 0;
+}
+
+static int export_test(const char* dump_path, bool compile_only = false) {
+    using namespace Shader;
+    Info info{};
+    info.hw_stage = HwStage::Export;
+    info.sw_stage = SwStage::Vertex;
+    RuntimeInfo runtime{};
+    runtime.Initialize(info.hw_stage, info.sw_stage);
+    runtime.hw.es.vertex_data_size = 8;
+    Common::ObjectPool<IR::Inst> pool;
+    IR::Block block(pool);
+    IR::IREmitter ir(block);
+    ir.Prologue();
+    const IR::Attribute builtins[] = {IR::Attribute::VertexId, IR::Attribute::InstanceId,
+                                     IR::Attribute::BaseVertex, IR::Attribute::BaseInstance};
+    for (u32 comp = 0; comp < 4; ++comp) {
+        info.loads.Set(builtins[comp], 0);
+        info.stores.Set(IR::Attribute::Position0, comp);
+        ir.SetAttribute(IR::Attribute::Position0,
+                        ir.BitCast<IR::F32>(ir.GetAttributeU32(builtins[comp])), comp);
+    }
+    info.stores.Set(IR::Attribute::Param0, 0);
+    info.stores.Set(IR::Attribute::Param0, 3);
+    ir.SetAttribute(IR::Attribute::Param0, ir.Imm32(42.0f), 0);
+    ir.SetAttribute(IR::Attribute::Param0,
+                    ir.BitCast<IR::F32>(IR::U32{ir.IAdd(ir.GetAttributeU32(IR::Attribute::VertexId),
+                                              ir.GetAttributeU32(IR::Attribute::InstanceId))}), 3);
+    IR::Program program(info);
+    program.blocks.push_back(&block);
+    program.syntax_list.push_back({.data = {.block = &block}, .type = IR::AbstractSyntaxNode::Type::Block});
+    program.syntax_list.push_back({.type = IR::AbstractSyntaxNode::Type::Return});
+    Profile profile{};
+    profile.supported_spirv = 0x00010600;
+    Backend::Bindings bindings{};
+    Backend::SPIRV::GeometryComputeLayout layout;
+    const auto code = Backend::SPIRV::EmitSPIRV(profile, runtime, program, bindings, &layout);
+    expect(layout.input_binding, 0, "export input binding", 0);
+    expect(layout.output_binding, 1, "export output binding", 0);
+    expect(layout.attribute_dwords, 8, "export stride", 0);
+    if (dump_path) {
+        if (std::filesystem::exists(dump_path)) return 2;
+        std::ofstream file(dump_path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(code.data()), code.size() * 4);
+    }
+    if (compile_only) return 0;
+    Gpu gpu(code, false);
+    struct Case { u32 vertices, instances, base_vertex, base_instance, indexed, input_words, output_words; };
+    const Case cases[] = {
+        {3,2,5,7,0,8,60}, {4,3,0xfffffffeu,10,1,12,100},
+        {4,2,0,0,1,11,68}, // incomplete index list must reject the entire draw
+        {0,5,0,0,0,8,20}, {3,0,0,0,0,8,20},
+        {3,2,0,0,0,7,60}, {3,2,0,0,0,8,3},
+        {3,2,0,0,0,8,4}, {3,2,0,0,0,8,23},
+        {0xffffffffu,0xffffffffu,0,0,0,8,44},
+        {3,0xffffffffu,0,0xfffffffeu,0,8,60},
+        {3,2,0,0,2,12,60}, {3,2,0,0,0,1,60},
+        {4,2,0xffffffffu,0xffffffffu,1,12,68},
+    };
+    for (u32 test = 0; test < std::size(cases); ++test) {
+        const auto& c = cases[test];
+        std::vector<u32> input(c.input_words);
+        const u32 header[] = {c.vertices,c.instances,c.base_vertex,c.base_instance,c.indexed,0,0,0};
+        std::copy_n(header, std::min(8u,c.input_words), input.begin());
+        const u32 indices[] = {7,2,7,0xffffffffu};
+        for (u32 i = 8; i < c.input_words; ++i) input[i] = indices[i-8];
+        std::array<u32,1024> expected;
+        expected.fill(0xdeadbeefu);
+        if (c.output_words >= 4) {
+            std::fill_n(expected.begin(), 4, 0u);
+            const bool valid = c.input_words >= 8 && c.indexed <= 1 &&
+                               (!c.indexed || c.vertices <= c.input_words - 8);
+            const u32 count = valid ? u32(std::min<u64>(u64(c.vertices) * c.instances,
+                                                       (c.output_words - 4) / 8)) : 0;
+            expect(count <= 64, 1, "export test dispatch capacity", test);
+            expected[0] = count;
+            expected[1] = valid && c.vertices != 0 ? c.vertices : 0;
+            for (u32 point = 0; point < count; ++point) {
+                const u32 vertex = (c.indexed ? indices[point % c.vertices] : point % c.vertices) + c.base_vertex;
+                const u32 instance = point / c.vertices + c.base_instance;
+                const u32 values[] = {vertex,instance,c.base_vertex,c.base_instance,
+                                      std::bit_cast<u32>(42.0f),0,0,vertex+instance};
+                std::copy_n(values,8,expected.begin()+4+point*8);
+            }
+        }
+        gpu.run(true,0,nullptr,input,c.output_words*4);
+        for (u32 word = 0; word < 1024; ++word)
+            expect(gpu.mapped[1][word],expected[word],"export readback/guard",word);
+    }
+    std::puts("PASS: ES compute indexed/nonindexed vertices, instances, base offsets, overflow and bounds (14 cases)");
+    return 0;
+}
+
+static int specialization_test() {
+    using namespace Shader;
+    Info info{};
+    info.hw_stage = HwStage::Fragment;
+    info.sw_stage = SwStage::Fragment;
+    info.images.push_back({.is_array = true});
+    RuntimeInfo runtime{};
+    runtime.Initialize(info.hw_stage, info.sw_stage);
+    Profile profile{};
+    profile.emulate_robustness = true;
+    const auto make = [&](AmdGpu::ImageType type, bool bound, bool integer = false) {
+        auto sharp = AmdGpu::Image::Null(false);
+        sharp.type = u64(type);
+        sharp.base_address = bound ? 0x1234 : 0;
+        if (integer) sharp.num_format = u64(AmdGpu::NumberFormat::Uint);
+        std::memcpy(info.images[0].sharp_fetch.immediates.data(), &sharp, sizeof(sharp));
+        return StageSpecialization(info, runtime, profile, {});
+    };
+    const auto array = make(AmdGpu::ImageType::Color2DArray, true);
+    const auto absent = make(AmdGpu::ImageType::Color2D, false);
+    if (array == absent || absent == array) {
+        std::fprintf(stderr, "Incompatible missing 2D texture reused a 2D-array module\n");
+        return 1;
+    }
+    const auto absent_array = make(AmdGpu::ImageType::Color2DArray, false);
+    if (absent_array.images[0].type != AmdGpu::ImageType::Color2DArray ||
+        absent_array.images[0].num_bindings != 1 || absent_array.bitset.any() ||
+        !(array == absent_array)) {
+        std::fprintf(stderr, "Missing typed array lost its interface or compatible reuse\n");
+        return 1;
+    }
+    if (absent == absent_array || absent_array == absent) {
+        std::fprintf(stderr, "All-null shortcut ignored image dimensions\n");
+        return 1;
+    }
+    const auto planar = make(AmdGpu::ImageType::Color2D, true);
+    const auto integer = make(AmdGpu::ImageType::Color2D, true, true);
+    if (!(planar == absent) || integer == absent || absent == integer) {
+        std::fprintf(stderr, "Null matching did not preserve sampled scalar type\n");
+        return 1;
+    }
+    auto shifted = absent;
+    ++shifted.start.unified;
+    if (shifted == absent || absent == shifted) {
+        std::fprintf(stderr, "Missing descriptors ignored their binding locations\n");
+        return 1;
+    }
+    std::puts("PASS: null texture dimensionality, scalar type, compatible reuse and bindings");
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc >= 2 && std::string_view(argv[1]) == "--specialization-only")
+        return specialization_test();
+    if (argc >= 2 && std::string_view(argv[1]) == "--export-only")
+        return export_test(argc > 2 ? argv[2] : nullptr);
+    if (argc >= 2 && std::string_view(argv[1]) == "--export-compile-only")
+        return export_test(argc > 2 ? argv[2] : nullptr, true);
+    if (argc >= 2 && std::string_view(argv[1]) == "--geometry-only")
+        return geometry_test(argc > 2 ? argv[2] : nullptr);
+    if (argc >= 2 && std::string_view(argv[1]) == "--geometry-compile-only")
+        return geometry_test(argc > 2 ? argv[2] : nullptr, true);
     setenv("BB_DIRECT_MEMORY_ACCESS", "1", 1);
     {
         Shader::Info info{};
@@ -471,11 +427,15 @@ int main(int argc, char **argv) {
     }
     const auto dir = argc > 1 ? argv[1] : "out/macos/robustness";
     std::filesystem::create_directories(dir);
-    for (int mode = 0; mode < 6; ++mode) {
+    std::vector<std::array<u32, 5>> arithmetic_reference;
+    for (int mode = 0; mode < 8; ++mode) {
         const bool images = mode == 1, widths = mode == 2, shared = mode == 3, dma = mode == 4;
         const bool readonly = mode == 5;
-        const auto code = shader(images, widths, shared, dma, readonly);
+        const int arithmetic = mode >= 6 ? mode - 5 : 0;
+        const auto code = shader(images, widths, shared, dma, readonly, arithmetic);
         std::ofstream out(std::filesystem::path(dir) / (images   ? "images.spv"
+                                                        : arithmetic == 1 ? "arithmetic-original.spv"
+                                                        : arithmetic == 2 ? "arithmetic-inline.spv"
                                                         : readonly ? "readonly.spv"
                                                         : dma ? "dma.spv"
                                                         : shared ? "shared.spv"
@@ -487,6 +447,49 @@ int main(int argc, char **argv) {
         if (argc > 2 && std::strcmp(argv[2], "--emit-only") == 0)
             continue;
         Gpu gpu(code, images, dma);
+        if (arithmetic) {
+            const u32 edge[] = {0, 0x80000000, 1, 0x80000001, 0x007fffff, 0x00800000,
+                                0x3f800000, 0xbf800000, 0x3f800001, 0x3f800002,
+                                0x7f7fffff, 0xff7fffff, 0x7f800000, 0xff800000, 0x7fc00000};
+            std::vector<std::array<u32, 4>> cases;
+            for (u32 a : edge) for (u32 b : edge)
+                cases.push_back({a, b, 0xbf800002, 0});
+            // Multiplication rounds before addition in the first expression,
+            // while the explicit fused operation retains its tiny remainder.
+            cases.push_back({0x3f800001, 0x3f800001, 0xbf800002, 0});
+            u32 seed = 0x31415926;
+            for (unsigned i = 0; i < 256; ++i) {
+                std::array<u32, 4> values{};
+                for (auto& value : values) {
+                    seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+                    value = seed;
+                }
+                cases.push_back(values);
+            }
+            for (size_t i = 0; i < cases.size(); ++i) {
+                gpu.run(true, 0, cases[i].data());
+                std::array<u32, 5> actual{};
+                std::copy_n(gpu.mapped[1], actual.size(), actual.begin());
+                if (arithmetic == 1) {
+                    arithmetic_reference.push_back(actual);
+                } else {
+                    for (size_t j = 0; j < actual.size(); ++j) {
+                        const u32 expected = arithmetic_reference[i][j];
+                        // NaN payload propagation is not specified by SPIR-V.
+                        if (std::isnan(std::bit_cast<float>(expected)) &&
+                            std::isnan(std::bit_cast<float>(actual[j]))) continue;
+                        expect(actual[j], expected, "Metal inline arithmetic equivalence", i * 5 + j);
+                    }
+                }
+                if (i == 225) {
+                    expect(actual[3], 0, "separate multiplication rounding", 3);
+                    expect(actual[4], 0x28800000, "explicit fused rounding", 4);
+                }
+            }
+            std::printf("PASS: %s arithmetic, %zu cases including signed zero, NaN, infinity, denormals and rounding\n",
+                        arithmetic == 1 ? "reference" : "inline", cases.size());
+            continue;
+        }
         if (dma) {
             gpu.run(true);
             for (u32 i = 0; i < 4; ++i)

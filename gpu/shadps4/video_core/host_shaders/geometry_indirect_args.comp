@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: GPU-written indirect arguments of a geometry-shader draw become the inputs of its
+// compute emulation (vk_rasterizer.cpp, PrepareGeometry) without a CPU readback: the ES/GS
+// kernel header, their dispatch arguments and the replay draw's indirect arguments.
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) readonly buffer Arguments { uint args[]; };  // VkDrawIndirectCommand
+layout(std430, binding = 1) readonly buffer Count { uint counts[]; };
+layout(std430, binding = 2) writeonly buffer Header { uint header[8]; };
+// dispatch x, y, z, pad, replay vertex count, instance count, first vertex, first instance
+layout(std430, binding = 3) writeonly buffer Indirect { uint indirect[8]; };
+
+layout(push_constant) uniform Push {
+    uint capacity;        // points the ES/GS buffers hold
+    uint replay_vertices; // (max_vertices - 2) * 3
+    uint has_count;
+    uint args_word;  // first argument within the bound range
+    uint count_word;
+} push;
+
+void main() {
+    uint vertices = args[push.args_word];
+    uint instances = args[push.args_word + 1];
+    if (push.has_count != 0 && counts[push.count_word] == 0) {
+        vertices = 0;
+    }
+    // Clamp to the buffers: whole instances of at most capacity points.
+    if (instances > 1) {
+        vertices = min(vertices, push.capacity / instances);
+    } else {
+        vertices = min(vertices, push.capacity);
+    }
+    const uint points = vertices * instances;
+    header[0] = vertices;
+    header[1] = instances;
+    header[2] = args[push.args_word + 2];
+    header[3] = args[push.args_word + 3];
+    header[4] = 0;
+    header[5] = 0;
+    header[6] = 0;
+    header[7] = 0;
+    indirect[0] = (points + 63) / 64;
+    indirect[1] = 1;
+    indirect[2] = 1;
+    indirect[3] = 0;
+    indirect[4] = push.replay_vertices;
+    indirect[5] = points;
+    indirect[6] = 0;
+    indirect[7] = 0;
+}

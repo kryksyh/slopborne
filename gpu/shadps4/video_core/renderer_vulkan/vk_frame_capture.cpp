@@ -2,14 +2,20 @@
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 
 #include <algorithm>
+#include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <format>
+#include <memory>
 #include <mutex>
 
+#include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/image_info.h"
 
 namespace Vulkan {
@@ -86,8 +92,9 @@ void AddShader(Entry& entry, u64 hash) {
 
 void Write(VAddr presented) {
     const char* dir = std::getenv("BB_CAPTURE_DIR");
-    const std::string path =
-        std::format("{}/frame_{}.txt", dir ? dir : ".", static_cast<long long>(std::time(nullptr)));
+    static u32 written = 0;
+    const std::string path = std::format("{}/frame_{}_{:03}.txt", dir ? dir : ".",
+                                         static_cast<long long>(std::time(nullptr)), written++);
     FILE* f = std::fopen(path.c_str(), "w");
     if (!f) {
         std::printf("Frame capture: cannot write %s\n", path.c_str());
@@ -291,6 +298,108 @@ void FrameCapture::Buffer(u64 stage_hash, u32 slot, VAddr address, const void* d
     pending_buffers.push_back(std::move(out));
 }
 
+namespace {
+std::atomic<u32> gpu_buffer_captures{0};
+constexpr u32 MaxGpuBufferCaptures = 512;
+}
+
+bool FrameCapture::WantsGpuBuffer(u64 stage_hash) {
+    static const u64 selected = [] {
+        const char* hash = std::getenv("BB_CAPTURE_GPU_BUFFER_HASH");
+        const char* dir = std::getenv("BB_CAPTURE_GPU_BUFFER_DIR");
+        if (!hash || !dir || !*dir) return u64{0};
+        char* end{};
+        const u64 value = std::strtoull(hash, &end, 16);
+        return end && !*end ? value : u64{0};
+    }();
+    return selected && stage_hash == selected && Active() &&
+           gpu_buffer_captures.load(std::memory_order_relaxed) < MaxGpuBufferCaptures;
+}
+
+void FrameCapture::GpuBuffer(Runtime& runtime, u64 stage_hash, u32 slot, VAddr address,
+                             const VideoCore::Buffer* source, u64 offset, u64 full_size,
+                             std::vector<u8> guest_bytes, const u8* staged_bytes) {
+    if (!WantsGpuBuffer(stage_hash) || guest_bytes.empty() ||
+        guest_bytes.size() > MaxGpuBufferBytes || offset > source->SizeBytes() ||
+        guest_bytes.size() > source->SizeBytes() - offset)
+        return;
+    const u32 index = gpu_buffer_captures.fetch_add(1, std::memory_order_relaxed);
+    if (index >= MaxGpuBufferCaptures) return;
+    const u64 bytes = guest_bytes.size();
+    std::vector<u8> staged;
+    if (staged_bytes) staged.assign(staged_bytes, staged_bytes + bytes);
+    const u64 frame = flips.load(std::memory_order_relaxed);
+    const auto stamp = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto path = std::filesystem::path(std::getenv("BB_CAPTURE_GPU_BUFFER_DIR")) /
+                      std::format("buffer_{}_{}_f{}_s{}", stamp, index, frame, slot);
+    pending_buffers.push_back(std::format("  GPU/guest buffer pair: {}", path.string()));
+    auto readback = std::make_shared<VideoCore::Buffer>(runtime.GetInstance(), 0, bytes,
+                                                      VideoCore::MemoryType::HostCached,
+                                                      "Diagnostic shader buffer readback");
+    auto& scheduler = runtime.GetScheduler();
+    const vk::BufferCopy copy{offset, 0, bytes};
+    runtime.CopyBuffer(source, readback.get(), std::span{&copy, 1});
+    // Keep the normal source-access tracker consistent, including later writes.
+    runtime.FlushBarriers();
+    scheduler.Record([](vk::CommandBuffer command) {
+        const vk::MemoryBarrier2 host{
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead};
+        command.pipelineBarrier2(vk::DependencyInfo{.memoryBarrierCount = 1,
+                                                   .pMemoryBarriers = &host});
+    });
+    const u64 arena_address = source->CpuAddr();
+    scheduler.DeferPriorityOperation([readback, guest = std::move(guest_bytes), staged = std::move(staged), path, stage_hash,
+                                       slot, address, offset, full_size, frame, arena_address] {
+        readback->Invalidate(0, guest.size());
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        // An exclusive directory prevents overwriting any existing diagnostic.
+        if (ec || !std::filesystem::create_directory(path, ec) || ec) {
+            std::printf("GPU buffer capture: cannot create %s\n", path.string().c_str());
+            return;
+        }
+        const auto gpu = readback->mapped_data.first(guest.size());
+        u64 mismatches = 0, first_mismatch = guest.size();
+        for (u64 i = 0; i < guest.size(); ++i) {
+            if (gpu[i] != guest[i]) {
+                ++mismatches;
+                first_mismatch = std::min(first_mismatch, i);
+            }
+        }
+        std::ofstream gpu_file(path / "gpu.bin", std::ios::binary);
+        gpu_file.write(reinterpret_cast<const char*>(gpu.data()), gpu.size());
+        std::ofstream guest_file(path / "guest.bin", std::ios::binary);
+        guest_file.write(reinterpret_cast<const char*>(guest.data()), guest.size());
+        u64 staged_mismatches = 0;
+        bool staged_written = true;
+        if (!staged.empty()) {
+            std::ofstream staged_file(path / "staged.bin", std::ios::binary);
+            staged_file.write(reinterpret_cast<const char*>(staged.data()), staged.size());
+            staged_written = bool(staged_file);
+            for (u64 i = 0; i < staged.size(); ++i) staged_mismatches += staged[i] != gpu[i];
+        }
+        std::ofstream metadata(path / "metadata.txt");
+        metadata << std::format("shader={:016x}\nslot={}\nflip={}\nguest_address={:#x}\n"
+                                "arena_address={:#x}\nsource_offset={}\nfull_bytes={}\n"
+                                "captured_bytes={}\nmismatched_bytes={}\nfirst_mismatch={}\n",
+                                stage_hash, slot, frame, address, arena_address, offset, full_size,
+                                guest.size(), mismatches, first_mismatch);
+        metadata << std::format("staged_capture={}\ngpu_staged_mismatched_bytes={}\n",
+                                !staged.empty(), staged_mismatches);
+        metadata << "Guest bytes were sampled at binding time. GPU-generated inputs may legitimately "
+                    "differ. The copy and barriers perturb timing; this is not FPS evidence.\n";
+        if (!gpu_file || !guest_file || !metadata || !staged_written)
+            std::printf("GPU buffer capture: incomplete write at %s\n", path.string().c_str());
+        else
+            std::printf("GPU buffer capture: %s (%llu/%zu bytes differ)\n", path.string().c_str(),
+                        static_cast<unsigned long long>(mismatches), guest.size());
+    });
+}
+
 void FrameCapture::Sampled(const VideoCore::ImageInfo& info, bool storage) {
     if (pending_sampled.size() < 64) {
         pending_sampled.emplace_back(ToTarget(info), storage);
@@ -301,6 +410,53 @@ void FrameCapture::Note(const char* text) {
     if (!entries.empty()) {
         entries.back().note += text;
     }
+}
+
+bool FrameCapture::WantsDrawInputs(u64 vs_hash, u64 ps_hash) {
+    static const u64 selected = [] {
+        const char* hash = std::getenv("BB_CAPTURE_DRAW_HASH");
+        if (!hash || !*hash) return u64{0};
+        char* end{};
+        const u64 value = std::strtoull(hash, &end, 16);
+        return end && !*end ? value : u64{0};
+    }();
+    return selected && (vs_hash == selected || ps_hash == selected) && Active();
+}
+
+void FrameCapture::DrawInputs(u64 vs_hash, u64 ps_hash, const Shader::PushData& push,
+                               std::span<const vk::WriteDescriptorSet> writes) {
+    if (!WantsDrawInputs(vs_hash, ps_hash) ||
+        state.load(std::memory_order_relaxed) != Recording || entries.empty()) return;
+    std::string text = std::format("\n  exact inputs vs {:016x} ps {:016x}\n  push bytes:",
+                                   vs_hash, ps_hash);
+    // Preserve float bit patterns, offsets and every packed user-data field.
+    for (const auto byte : std::as_bytes(std::span{&push, 1})) {
+        text += std::format(" {:02x}", std::to_integer<u8>(byte));
+    }
+    for (const auto& write : writes) {
+        text += std::format("\n  descriptor binding {} array {} type {} count {}",
+                            write.dstBinding, write.dstArrayElement,
+                            vk::to_string(write.descriptorType), write.descriptorCount);
+        for (u32 i = 0; i < write.descriptorCount; ++i) {
+            if (write.pBufferInfo) {
+                const auto& info = write.pBufferInfo[i];
+                text += std::format("\n    [{}] buffer {:#x} offset {} range {}", i,
+                                    std::bit_cast<u64>(info.buffer), info.offset, info.range);
+            }
+            if (write.pImageInfo) {
+                const auto& info = write.pImageInfo[i];
+                text += std::format("\n    [{}] image_view {:#x} sampler {:#x} layout {}", i,
+                                    std::bit_cast<u64>(info.imageView),
+                                    std::bit_cast<u64>(info.sampler),
+                                    vk::to_string(info.imageLayout));
+            }
+            if (write.pTexelBufferView) {
+                text += std::format("\n    [{}] texel_view {:#x}", i,
+                                    std::bit_cast<u64>(write.pTexelBufferView[i]));
+            }
+        }
+    }
+    Note(text.c_str());
 }
 
 } // namespace Vulkan

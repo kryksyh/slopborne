@@ -341,11 +341,11 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
         }
     }
     const auto stage = info.sw_stage;
-    if (stage == SwStage::Vertex) {
+    if (stage == SwStage::Vertex && !ctx.geometry) {
         ctx.AddExtension("SPV_KHR_shader_draw_parameters");
         ctx.AddCapability(spv::Capability::DrawParameters);
     }
-    if (stage == SwStage::Geometry) {
+    if (stage == SwStage::Geometry && !ctx.geometry) {
         ctx.AddCapability(spv::Capability::Geometry);
     }
     if (info.hw_stage == HwStage::Fragment) {
@@ -413,6 +413,11 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
 
 void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
     const std::span interfaces(ctx.interfaces.data(), ctx.interfaces.size());
+    if (ctx.geometry) {
+        ctx.AddExecutionMode(main, spv::ExecutionMode::LocalSize, 64U, 1U, 1U);
+        ctx.AddEntryPoint(spv::ExecutionModel::GLCompute, main, "main", interfaces);
+        return;
+    }
     spv::ExecutionModel execution_model{};
     switch (info.sw_stage) {
     case SwStage::Compute: {
@@ -679,8 +684,9 @@ void PatchPhiNodes(const IR::Program& program, EmitContext& ctx) {
 } // Anonymous namespace
 
 std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_info,
-                           const IR::Program& program, Bindings& binding) {
-    EmitContext ctx{profile, runtime_info, program.info, binding};
+                           const IR::Program& program, Bindings& binding,
+                           GeometryComputeLayout* geometry) {
+    EmitContext ctx{profile, runtime_info, program.info, binding, geometry};
     const Id main{DefineMain(ctx, program)};
     DefineEntryPoint(program.info, ctx, main);
     SetupCapabilities(program.info, profile, runtime_info, ctx);

@@ -74,6 +74,7 @@ enum class BufferType : u8 {
     SharedMemory,
     ClipPlanes,
     ResourcePresence, // macOS fallback: buffer and image validity for this draw
+    GeometryReplay, // expanded ES/GS vertices; synthetic replay shader only
 };
 
 struct BufferResource {

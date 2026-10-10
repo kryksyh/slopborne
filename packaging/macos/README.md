@@ -5,10 +5,12 @@ and network libraries compile into an **x86-64 macOS executable**. Apple Silicon
 runs the executable and original x86-64 guest instructions through Rosetta.
 This is not an ARM64 recompilation of the game.
 
-**Status: builds and reaches saved gameplay, but is not stable. The 720p clinic
-camera/movement benchmark sampled 29.6–30.0 FPS; its process subsequently suffered
-a MoltenVK GPU hang while left running. The short benchmark is not a stability pass.**
-A heavier clinic starting view runs around 28.5 FPS. Graphics artifacts remain.
+**Status: builds and reaches saved gameplay. Native 1080p Hunter's Dream sampled
+33–34 FPS in the initial view and 31.5–36.6 FPS during a short camera/idle test
+after optimizing strict Metal shader arithmetic. This is not a stability guarantee.**
+Graphics artifacts and GPU faults remain under investigation. All stock effects
+were enabled in that comparison, but unsupported geometry-shader draws are still
+skipped; enabled settings do not establish complete rendering compatibility.
 The tested M3 Pro with MoltenVK 1.4.2 lacks `robustBufferAccess2` and
 `nullDescriptor`. The renderer automatically uses shader bounds checks, shader
 vertex pulling, and explicit resource-presence data with valid placeholder
@@ -222,10 +224,49 @@ process after measurement. `--wait-for-exit` keeps the launcher attached with th
 game open after measurement. `--move-seconds 5` adds five seconds of forward and
 backward movement using the copied save. Failed runs also retain a JSON report.
 All outputs remain under `out/macos/benchmarks`.
+On macOS the launcher also samples whole-process resident memory, physical
+footprint, wired memory and disk I/O once per second into `process-metrics.jsonl`.
+`process-metrics-summary.json` reports peaks and the memory trend in the latter
+half of the run. These are process counters, not a separate Metal allocation
+counter; growing asset caches during loading are not by themselves proof of a
+leak. Compare repeated routes and idle periods after warm-up. Sampling continues
+through `--wait-for-exit` and does not synchronize with the GPU.
 Full Metal shader validation can make pipeline warm-up take several minutes;
 validation runs should not be compared with normal performance runs.
 
 ### GPU audit findings
+
+The 2026-10-11 native-1080p comparison identified a large shader translation cost.
+SPIRV-Cross translates strict add/multiply/subtract operations into `optnone`
+helpers on Metal. A sampled lighting shader had 507 such calls in optimized Metal
+IR. The MoltenVK path now emits the same explicit FMA operations as those helpers,
+preserving each rounding boundary while allowing native shader optimization.
+Safe floating-point mode remains enabled; this does not turn on fast math.
+Set `BB_METAL_INLINE_ARITHMETIC=0` to restore the previous path for an A/B test.
+
+Using one executable, the same copied save, native 1920x1080, stock LOD, no
+upscaling, all stock effect settings, and a 60 FPS measurement cap:
+
+| Arithmetic path | Initial warm view | Camera/idle result |
+| --- | --- | --- |
+| Original helpers | About 14 FPS, about 70 ms/frame | Earlier baselines faulted during the camera sweep. |
+| Native FMA equivalent | 33.3–34.0 FPS, about 29 ms/frame | 20-second camera sweep plus 20-second idle passed; 31.5–36.6 FPS windows. |
+
+Production-backend GPU readback compares 482 numerical cases (2,410 results),
+including signed zero, infinities, NaNs, denormals and separate/fused rounding,
+with Metal API and shader validation enabled. NaN payload differences are allowed.
+An isolated native arithmetic kernel also matched 262,144 values and measured
+0.245 ms versus 0.039 ms; that kernel ratio is not the game's speedup.
+Evidence: `out/macos/optimization-20261011/performance-analysis.json` and runs
+`20261011-004712-003448` (optimized), `20261011-004906-201545` (repeat baseline).
+
+The native Metal trace also found 209 render encoders and 90 buffer-copy encoders
+in one frame. These counts justify investigating pass splits and redundant
+transfers, but do not prove any particular barrier or copy can be removed.
+`summarize-metal-trace.py` summarizes xctrace XML exports using interval unions
+so overlapping GPU channels are not double-counted.
+The separate `BB_BOUNDED_BUFFER_READS=1` experiment did not show a clear gain and
+remains disabled by default.
 
 | Path | Finding and action |
 | --- | --- |
@@ -243,6 +284,97 @@ presentation blit, but requires changing image ownership and overlay ordering.
 That rewrite is not included. Geometry-shader compatibility and visible shading
 artifacts also remain. Passing a clinic camera test does not validate other areas,
 combat, all shader paths, or a native ARM64/Metal backend.
+
+The experimental `geometry-probe` target compiles a captured StandardParticle
+geometry shader offline. Adding `--compute` lowers point inputs to a compute
+dispatch, preserving output attributes and strip boundaries in a bounded storage
+buffer. Both forms of the captured shader pass Vulkan 1.3 SPIR-V validation.
+`robustness-shader-test --geometry-only` passed six GPU readback cases on the M3
+Pro with Metal API/shader validation enabled: attributes, strip boundaries,
+overflow, short input/output buffers, and inactive invocations.
+`--geometry-compile-only new-output.spv` generates the test shader without a GPU.
+`geometry-probe ... new-output.spv --replay` emits the matching triangle-list
+vertex shader. It clips incomplete triangles and triangles crossing strip cuts,
+and restarts winding at each new strip. `geometry-replay-test` passed vertex-output
+readback on the M3 Pro with Metal validation, including odd-length preceding
+strips and short input/output buffers. This validates generated vertex attributes;
+it does not replace an in-game image comparison.
+`geometry-probe ... new-output.spv --export` lowers the captured particle input
+shader to compute too. The draw header supplies indices, base vertex and instance
+values; output uses the bounded ES-to-GS layout. It passes SPIR-V validation.
+`robustness-shader-test --export-only` passed 14 GPU readback cases with Metal
+validation, covering indices, instances, base offsets, overflow and short buffers;
+
+`--export-compile-only new-output.spv` emits its test shader without a GPU.
+GS input headers carry points per instance so primitive IDs restart correctly.
+Inactive GS records clear their counts before returning, preventing stale replay.
+Replay supports either provoking-vertex convention; the caller must match its
+pipeline state. `geometry-replay-test --first` and its default last-vertex mode
+both passed three GPU readback cases. The six GS cases also passed again with
+instance-ID and retired-record checks.
+This compiler path is not yet connected to game draws: ES/GS dispatch submission,
+replay draw submission and resource lifetime/barrier integration remain.
+Unsupported geometry effects therefore remain a correctness gap in the game.
+
+For targeted buffer-coherence investigation, set `BB_CAPTURE_GPU_BUFFER_HASH` to
+one shader's hexadecimal hash and `BB_CAPTURE_GPU_BUFFER_DIR` to a new output
+directory, then request frames through `BB_CAPTURE_SEQUENCE`. The diagnostic
+captures up to 512 read-only bindings, at most 64 KiB each. Each unique directory
+contains `gpu.bin`, `guest.bin`, metadata, and `staged.bin` for constant-ring
+bindings. The existing text capture for constant-ring bindings shows staged
+bytes, not live guest memory. Copies complete asynchronously before CPU readback;
+extra copy/barrier work means these runs are not performance evidence. A
+GPU/guest mismatch can be legitimate for GPU-generated inputs or guest memory
+reused after a draw was prepared, so compare the staged bytes and the bad/good
+frames before attributing a coherence fault.
+
+`BB_CAPTURE_DRAW_HASH=<hex VS or PS hash>` adds the exact push-constant bytes,
+resolved descriptor handles/ranges/layouts, and direct-draw/index arguments to
+matching draws in text frame captures. Unlike the normal first-four-draw buffer
+summary, this records every matching draw. Handle values only compare within
+one process; constant-ring offsets normally change between frames. With the
+GPU-buffer diagnostic selecting the vertex shader, indexed draws also capture
+their resolved index range as slot `4294967295` (at most 64 KiB). This readback
+adds transfers and barriers; use it for correctness investigation, not timing.
+
+`BB_PM4_FAULT_DIR=/absolute/new/directory` records malformed graphics-command
+buffers before the existing fatal check, including unsupported type 0/1 headers
+and truncated type 3 packets. Each unique subdirectory contains
+`initial.bin`, `current.bin`, and metadata identifying the failing word offset,
+fault reason and observed header. Use `analyze-pm4-fault.py` to compare them.
+For prepared top-level submissions, the initial bytes come from the immutable
+submit-time copy; otherwise they come from the start of processing (up to 16 MiB).
+The command processor continues to execute the original guest memory, so this
+diagnostic does not hide a packet-lifetime bug by switching to the snapshot.
+
+`robustness-shader-test --specialization-only` runs CPU-only checks that missing
+textures retain their shader interface dimensions, scalar types, and descriptor
+binding locations. A missing texture receives a real placeholder on Metal, so
+it cannot reuse a shader expecting an incompatible texture type. Shader metadata
+version 10 rejects older incomplete null-image specialization records; existing
+cache files are retained.
+
+`geometry-pipeline-test` runs lowered ES and GS kernels through the production
+Vulkan pipeline, descriptor allocation and deferred recorder, checking separate
+guest resources, appended input/output buffers and ES-to-GS memory ordering.
+`geometry-replay-test --binding-offset` checks replay at a nonzero descriptor
+binding, leaving room for fragment resources; add `--first` to check first-vertex
+provoking semantics. These are integration regressions, not game activation.
+
+Geometry shaders (MoltenVK has none) run as compute: separate ES/GS compute
+specializations write the expanded primitives, and a replay vertex shader draws them
+with the guest fragment shader. On by default; `BB_GEOMETRY_COMPUTE=0` skips these
+draws as before. Covered: point inputs, triangle-strip output, one GS invocation, no
+streamout or user clip planes; direct draws (non-indexed or 32-bit indexed) and
+non-indexed single indirect draws. The game's particles (Hunter's Dream mist, the
+StandardParticle GS) are GPU-written indirect draws: a one-thread compute turns their
+arguments into the ES/GS dispatch and replay draw arguments, up to 1024 points per
+draw, with no CPU readback. Per-vertex fragment inputs (MSL has no `PerVertexKHR`)
+become three flat corner inputs that the replay writes. Unsupported cases are skipped.
+`BB_GEOMETRY_INDIRECT_READBACK=1` adds a diagnostic bridge for indexed/multi-draw
+indirect geometry that reads the arguments back (a GPU wait per draw). Tests:
+`geometry-replay-test --first-hardware --negative-one-to-one --binding-offset`,
+`geometry-pipeline-test`.
 
 Camera/movement evidence (followed by a later GPU hang): `out/macos/benchmarks/20261010-224029-802245`
 (log, JSON report and before/after captures). Worst frames in the sweep ranged

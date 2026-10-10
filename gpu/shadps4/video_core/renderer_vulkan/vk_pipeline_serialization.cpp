@@ -13,7 +13,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // checked buffer and null-resource access
-static constexpr u32 ShaderMetaVersion = 8u; // ResourcePresence binding
+static constexpr u32 ShaderMetaVersion = 10u; // Preserve typed interfaces for missing image resources
 static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResource::needs_native)
 } // namespace Serialization
 

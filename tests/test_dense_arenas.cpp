@@ -91,6 +91,39 @@ struct Caches {
 };
 } // namespace VideoCore
 
+static void TestInputReadHazards(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
+                                Vulkan::Runtime& runtime) {
+    VideoCore::Buffer buffer(instance, 0, 16384, VideoCore::MemoryType::HostCached);
+    const vk::AccessFlags2 reads[] = {vk::AccessFlagBits2::eIndexRead,
+                                     vk::AccessFlagBits2::eVertexAttributeRead,
+                                     vk::AccessFlagBits2::eIndirectCommandRead};
+    const vk::PipelineStageFlags2 stages[] = {vk::PipelineStageFlagBits2::eVertexInput,
+                                             vk::PipelineStageFlagBits2::eVertexInput,
+                                             vk::PipelineStageFlagBits2::eDrawIndirect};
+    for (u32 i = 0; i < 3; ++i) {
+        runtime.FlushBarriers();
+        assert(!runtime.IsBufferAccessed(&buffer, 128, 16, true));
+        runtime.AccessBuffer(&buffer, 0, 0, stages[i], reads[i]);
+        assert(!runtime.IsBufferAccessed(&buffer, 0, 0, true));
+        assert(!runtime.IsBufferAccessed(&buffer, 8192, 16, true));
+        // A resolved draw/dispatch input must remain live until the next write.
+        runtime.AccessBuffer(&buffer, 128, 16, stages[i], reads[i]);
+        assert(!runtime.IsBufferAccessed(&buffer, 128, 16)); // read-after-read is safe
+        assert(runtime.IsBufferAccessed(&buffer, 128, 16, true));
+        assert(!runtime.IsBufferAccessed(&buffer, 8192, 16, true));
+        // The real copy/fill path consumes the WAR dependency and records a new write.
+        runtime.FillBuffer(&buffer, 128, 16, 0x12340000 + i);
+        assert(runtime.IsBufferAccessed(&buffer, 128, 16));
+    }
+    runtime.FlushBarriers();
+    scheduler.Finish();
+    buffer.Invalidate(128, 16);
+    u32 result[4];
+    std::memcpy(result, buffer.mapped_data.data() + 128, sizeof(result));
+    for (const u32 value : result) assert(value == 0x12340002);
+    std::puts("PASS: index, vertex and indirect input reads retain later-write hazards");
+}
+
 int main() {
     Vulkan::Instance instance(0, false);
     if (instance.SupportsSparseBuffers()) {
@@ -101,4 +134,5 @@ int main() {
     Vulkan::Runtime runtime(instance, scheduler);
     VideoCore::Caches caches(instance, scheduler, runtime);
     VideoCore::DenseArenaTest::Run(caches.buffers, runtime, scheduler, instance);
+    TestInputReadHazards(instance, scheduler, runtime);
 }

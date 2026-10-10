@@ -45,6 +45,10 @@ struct Profile {
     bool supports_workgroup_explicit_memory_layout{};
     bool supports_amd_shader_explicit_vertex_parameter{};
     bool supports_fragment_shader_barycentric{};
+    /// bbport: MSL has no per-vertex fragment inputs: they become three flat inputs (corner 0
+    /// at the attribute's location, corners 1 and 2 at FlatCornerLocation), which the geometry
+    /// replay vertex shader writes.
+    bool lower_per_vertex_to_flat_corners{};
     bool supports_shader_subgroup_clock{};
     bool has_broken_spirv_clamp{};
     bool lower_left_origin_mode{};
@@ -58,6 +62,7 @@ struct Profile {
     bool supports_shader_stencil_export{};
     bool emulate_robustness{};
     bool bounded_buffer_reads{}; // Opt-in experiment; preserve graphics settings.
+    bool metal_inline_arithmetic{}; // Preserve Metal helper arithmetic without optnone calls.
 
     bool operator==(const Profile&) const = default;
 };

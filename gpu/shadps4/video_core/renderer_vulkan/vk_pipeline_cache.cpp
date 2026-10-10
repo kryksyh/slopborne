@@ -45,6 +45,67 @@ constexpr static std::array DescriptorHeapSizes = {
     vk::DescriptorPoolSize{vk::DescriptorType::eSampler, 1024},
 };
 
+// Capture unsupported pipelines without submitting unsupported shader stages.
+// Every snapshot gets a new directory, preserving previous diagnostic files.
+static void DumpSkippedGeometry(const AmdGpu::Regs& regs) {
+    static const char* destination = std::getenv("BB_GEOMETRY_DUMP_DIR");
+    if (!destination || !destination[0]) {
+        return;
+    }
+    const auto gs = AmdGpu::GetParams(regs.gs_program);
+    const auto es = AmdGpu::GetParams(regs.es_program);
+    const auto copy = AmdGpu::GetParams(regs.vs_program);
+    const auto key = HashCombine(HashCombine(gs.hash, es.hash),
+                                 HashCombine(copy.hash, u64(regs.vgt_gs_max_vert_out)));
+    static std::mutex mutex;
+    static std::unordered_set<u64> captured;
+    std::scoped_lock lock{mutex};
+    if (captured.contains(key)) {
+        return;
+    }
+    std::error_code error;
+    const auto root = std::filesystem::path{destination};
+    std::filesystem::create_directories(root, error);
+    if (error) {
+        LOG_WARNING(Render_Vulkan, "Geometry snapshot directory: {}", error.message());
+        return;
+    }
+    const auto stem = fmt::format("gs_{:016x}_{}", gs.hash,
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto directory = root / stem;
+    if (!std::filesystem::create_directory(directory, error)) {
+        LOG_WARNING(Render_Vulkan, "Geometry snapshot creation: {}", error.message());
+        return;
+    }
+    using namespace Common::FS;
+    const auto save = [&](const char* name, const Shader::ShaderParams& params) {
+        IOFile{directory / fmt::format("{}.bin", name), FileAccessMode::Create}
+            .WriteSpan(params.code);
+        IOFile{directory / fmt::format("{}.userdata.bin", name), FileAccessMode::Create}
+            .WriteSpan(std::span<const u32>{params.user_data});
+    };
+    save("gs", gs);
+    save("es", es);
+    save("copy", copy);
+    IOFile{directory / "regs.bin", FileAccessMode::Create}.WriteObject(regs);
+    const auto text = fmt::format(
+        "gs={:016x}\nes={:016x}\ncopy={:016x}\nstages={}\ninput_primitive={}\n"
+        "output_primitive={}\nmax_vertices={}\ninvocations={}\nonchip={}\n"
+        "streamout={}\nesgs_item_dwords={}\ngsvs_item_dwords={}\nvertex_dwords={}\n"
+        "gs_user_regs={}\ngs_input_vgprs={}\n",
+        gs.hash, es.hash, copy.hash, u32(regs.stage_enable.raw), u32(regs.primitive_type),
+        u32(regs.vgt_gs_out_prim_type.GetPrimitiveType(0)), regs.vgt_gs_max_vert_out,
+        regs.vgt_gs_instance_cnt.IsEnabled() ? u32(regs.vgt_gs_instance_cnt.count) : 1u,
+        u32(regs.vgt_gs_mode.onchip), regs.vgt_strmout_config.raw,
+        regs.vgt_esgs_ring_itemsize, regs.vgt_gsvs_ring_itemsize,
+        regs.vgt_gs_vert_itemsize[0], u32(regs.gs_program.settings.num_user_regs),
+        u32(regs.gs_program.settings.vgpr_comp_cnt));
+    IOFile{directory / "pipeline.txt", FileAccessMode::Create, FileType::TextFile}
+        .WriteString(text);
+    captured.insert(key);
+    std::printf("Geometry snapshot: %s\n", directory.string().c_str());
+}
+
 static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs, const AmdGpu::VsOutputControl& ctl) {
     u32 num_outputs = 0;
 
@@ -327,6 +388,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_amd_shader_explicit_vertex_parameter =
             instance_.IsAmdShaderExplicitVertexParameterSupported(),
         .supports_fragment_shader_barycentric = instance_.IsFragmentShaderBarycentricSupported(),
+        .lower_per_vertex_to_flat_corners = instance_.GetDriverID() == vk::DriverId::eMoltenvk,
         .supports_shader_subgroup_clock = instance_.IsShaderSubgroupClockSupported(),
         .needs_manual_interpolation = instance.IsFragmentShaderBarycentricSupported() &&
                                       instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
@@ -351,6 +413,11 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .bounded_buffer_reads = [] {
             const char* value = std::getenv("BB_BOUNDED_BUFFER_READS");
             return value && value[0] == '1';
+        }(),
+        .metal_inline_arithmetic = instance.GetDriverID() == vk::DriverId::eMoltenvk &&
+            vk12_props.shaderSignedZeroInfNanPreserveFloat32 && [] {
+            const char* value = std::getenv("BB_METAL_INLINE_ARITHMETIC");
+            return !value || value[0] != '0';
         }(),
     };
     auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
@@ -421,8 +488,9 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
 }
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params,
-                                                           const PreparedDraw* prepared) {
+                                                           const PreparedDraw* prepared, bool allow_geometry) {
     used_prepared = nullptr;
+    sel.allow_geometry = allow_geometry;
     if (prepared) {
         if (const auto* pipeline = TryPreparedPipeline(*prepared)) {
             used_prepared = prepared;
@@ -442,9 +510,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false);
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry);
 
-        RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
+        if (!sel.geometry) RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
 
         if (EmulatorSettings.IsShaderCollect()) {
@@ -671,10 +739,153 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     return true;
 }
 
+// Draws with a geometry stage are dropped where the device lacks geometry shaders (MoltenVK);
+// one line per ES/GS pair says what they render to.
+static void LogSkippedGeometryDraw(const AmdGpu::Regs& regs, u32 mrt_mask) {
+    static std::mutex mutex;
+    static std::unordered_set<u64> logged;
+    const u64 es = regs.es_program.Address<u64>();
+    const u64 gs = regs.gs_program.Address<u64>();
+    std::scoped_lock lock{mutex};
+    if (!logged.insert(es ^ (gs << 1)).second) {
+        return;
+    }
+    std::printf("Skipped geometry draw: es %llx gs %llx vs %llx ps %llx, instances %u, max verts %u, "
+                "out prim %u, mrt mask %x, depth %ux%u slices %u\n",
+                static_cast<unsigned long long>(es), static_cast<unsigned long long>(gs),
+                static_cast<unsigned long long>(regs.vs_program.Address<u64>()),
+                static_cast<unsigned long long>(regs.ps_program.Address<u64>()),
+                regs.vgt_gs_instance_cnt.IsEnabled() ? regs.vgt_gs_instance_cnt.count : 1u,
+                regs.vgt_gs_max_vert_out, static_cast<u32>(regs.vgt_gs_out_prim_type.outprim_type),
+                mrt_mask, regs.depth_buffer.Pitch(), regs.depth_buffer.Height(),
+                regs.depth_view.NumSlices());
+    std::printf("Geometry guard state: primitive %u clip_disable %u clip_space %u clip_distances %u "
+                "user_clip %u onchip %u streamout %u\n", u32(regs.primitive_type),
+                u32(regs.IsClipDisabled()), u32(regs.clipper_control.clip_space),
+                u32(regs.vs_output_control.clip_distance_enable),
+                u32(regs.clipper_control.user_clip_plane_enable), u32(regs.vgt_gs_mode.onchip),
+                regs.vgt_strmout_config.raw);
+    std::fflush(stdout);
+}
+
+const GeometryKernel* PipelineCache::GetGeometryKernel(PipelineSelection& selection,
+                                                        HwStage stage, SwStage logical) {
+    const auto* guest = selection.regs->ProgramForStage(u32(stage));
+    ASSERT(guest && guest->Address<u32*>());
+    const auto params = AmdGpu::GetParams(*guest);
+    auto runtime_info = BuildRuntimeInfo(selection, stage, logical);
+    for (auto& kernel : geometry_kernels) {
+        auto& info = kernel->info;
+        if (info.hw_stage != stage || info.pgm_hash != params.hash) continue;
+        info.pgm_base = params.Base();
+        info.user_data = params.user_data;
+        info.RefreshFlatBuf();
+        const Shader::StageSpecialization spec(info, runtime_info, profile, {});
+        if (kernel->specialization == spec) return kernel.get();
+    }
+    auto kernel = std::make_unique<GeometryKernel>();
+    kernel->info = Shader::Info(stage, logical, params);
+    Shader::Backend::Bindings binding{};
+    CompileTimer timer;
+    const auto program = Shader::TranslateProgram(params.code, pools, kernel->info,
+                                                   runtime_info, profile);
+    const auto code = Shader::Backend::SPIRV::EmitSPIRV(
+        profile, runtime_info, program, binding, &kernel->layout);
+    kernel->specialization = Shader::StageSpecialization(kernel->info, runtime_info, profile, {});
+    kernel->module = Check(instance.GetDevice().createShaderModuleUnique(
+        {.codeSize = code.size() * sizeof(u32), .pCode = code.data()}));
+    ComputePipeline::SerializationSupport serialization{};
+    kernel->pipeline = std::make_unique<ComputePipeline>(
+        instance, scheduler, desc_heap, profile, *pipeline_cache,
+        ComputePipelineKey{HashCombine(params.hash, geometry_kernels.size())}, kernel->info,
+        *kernel->module, serialization, false, 2);
+    LOG_INFO(Render_Vulkan, "Lowered {} shader {:#x} to geometry compute, bindings {}/{}",
+             stage, params.hash, kernel->layout.input_binding, kernel->layout.output_binding);
+    const auto* result = kernel.get();
+    geometry_kernels.push_back(std::move(kernel));
+    return result;
+}
+
+bool PipelineCache::RefreshGeometryReplay(PipelineSelection& selection,
+                                           Shader::Backend::Bindings binding) {
+    const auto& regs = *selection.regs;
+    // Initial diagnostic path covers independent point inputs and triangle strips.
+    // Other geometries retain their existing path until their lowering is implemented.
+    if (regs.primitive_type != AmdGpu::PrimitiveType::PointList ||
+        regs.vgt_gs_out_prim_type.GetPrimitiveType(0) != AmdGpu::GsOutputPrimitiveType::TriangleStrip ||
+        regs.vgt_gs_max_vert_out < 3 || regs.vgt_gs_max_vert_out > 256 ||
+        (regs.vgt_gs_instance_cnt.IsEnabled() && regs.vgt_gs_instance_cnt.count != 1) ||
+        regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw ||
+        regs.IsClipDisabled() ||
+        regs.vs_output_control.clip_distance_enable || regs.clipper_control.user_clip_plane_enable)
+        return false;
+    const auto* es = GetGeometryKernel(selection, HwStage::Export, SwStage::Vertex);
+    const auto* gs = GetGeometryKernel(selection, HwStage::Geometry, SwStage::Geometry);
+    ASSERT(es->layout.attribute_dwords == regs.vgt_esgs_ring_itemsize);
+    const bool last = selection.graphics_key.provoking_vtx_last == AmdGpu::ProvokingVtxLast::Last;
+    const bool remap_depth = !instance.IsDepthClipControlSupported() &&
+                             regs.clipper_control.clip_space == AmdGpu::ClipSpace::MinusWToW;
+    // Fragment inputs read per vertex become flat corner inputs the replay writes.
+    u32 flat_corner_mask = 0;
+    if (const auto* fs = selection.infos[u32(SwStage::Fragment)];
+        fs && profile.lower_per_vertex_to_flat_corners) {
+        const auto& fs_runtime = selection.runtime_infos[u32(SwStage::Fragment)].hw.fs;
+        for (u32 i = 0; i < fs_runtime.num_inputs; ++i) {
+            if (fs->fs_interpolation[i].primary == Shader::Qualifier::PerVertex) {
+                flat_corner_mask |= 1u << fs_runtime.inputs[i].param_index;
+            }
+        }
+    }
+    const GeometryReplayStages* replay = nullptr;
+    for (const auto& candidate : geometry_replays) {
+        if (candidate->es == es && candidate->gs == gs &&
+            candidate->input_binding == binding.unified &&
+            candidate->last_provoking_vertex == last &&
+            candidate->remap_negative_depth == remap_depth &&
+            candidate->flat_corner_mask == flat_corner_mask) {
+            replay = candidate.get();
+            break;
+        }
+    }
+    if (!replay) {
+        auto created = std::make_unique<GeometryReplayStages>();
+        created->es = es;
+        created->gs = gs;
+        created->input_binding = binding.unified;
+        created->max_vertices = regs.vgt_gs_max_vert_out;
+        created->last_provoking_vertex = last;
+        created->remap_negative_depth = remap_depth;
+        created->flat_corner_mask = flat_corner_mask;
+        created->replay_info.hw_stage = HwStage::Vertex;
+        created->replay_info.sw_stage = SwStage::Vertex;
+        created->replay_info.pgm_hash = gs->info.pgm_hash;
+        created->replay_info.buffers.push_back({.used_types = Shader::IR::Type::U32,
+                                                .buffer_type = Shader::BufferType::GeometryReplay});
+        const auto code = Shader::Backend::SPIRV::EmitGeometryReplayVertex(
+            profile, gs->layout, created->max_vertices, ~0u, last, binding.unified,
+            instance.IsProvokingVertexSupported(), remap_depth, flat_corner_mask);
+        created->replay_module = Check(instance.GetDevice().createShaderModuleUnique(
+            {.codeSize = code.size() * sizeof(u32), .pCode = code.data()}));
+        replay = created.get();
+        geometry_replays.push_back(std::move(created));
+    }
+    const auto vertex = u32(SwStage::Vertex);
+    selection.geometry = replay;
+    selection.infos[vertex] = &replay->replay_info;
+    selection.modules[vertex] = *replay->replay_module;
+    // Separate runtime-only key; never serialized into the native shader cache.
+    selection.graphics_key.stage_hashes[vertex] =
+        HashCombine(0x47454f4d45545259ull, reinterpret_cast<uintptr_t>(replay));
+    selection.graphics_key.prim_type = AmdGpu::PrimitiveType::TriangleList;
+    selection.runtime_infos[vertex].Initialize(HwStage::Vertex, SwStage::Vertex);
+    return true;
+}
+
 bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     const auto& regs = (*sel.regs);
     auto& key = sel.graphics_key;
     sel.fetch_shader = std::nullopt;
+    sel.geometry = nullptr;
 
     Shader::Backend::Bindings binding{};
     const auto bind_stage = [&](HwStage stage_in, SwStage stage_out) -> bool {
@@ -716,7 +927,22 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     switch (regs.stage_enable.raw) {
     case AmdGpu::ShaderStageEnable::VgtStages::EsGs:
         if (!instance.IsGeometryStageSupported()) {
+            static const bool lower_geometry = EmulatorSettingsImpl::Flag("BB_GEOMETRY_COMPUTE", true);
+            if (lower_geometry && !sel.worker) {
+                static u32 reported = 0;
+                if (reported++ < 4)
+                    std::printf("Geometry selection: lowering_allowed %u primitive %u clip_disable %u clip_space %u "
+                                "clip_distances %u user_clip %u\n", u32(sel.allow_geometry),
+                                u32(regs.primitive_type), u32(regs.IsClipDisabled()),
+                                u32(regs.clipper_control.clip_space),
+                                u32(regs.vs_output_control.clip_distance_enable),
+                                u32(regs.clipper_control.user_clip_plane_enable));
+            }
+            if (lower_geometry && sel.allow_geometry && !sel.worker &&
+                RefreshGeometryReplay(sel, binding)) return true;
+            if (!sel.worker) DumpSkippedGeometry(regs);
             LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping");
+            LogSkippedGeometryDraw(regs, key.mrt_mask);
             return false;
         }
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {
@@ -749,6 +975,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
         if (!instance.IsGeometryStageSupported()) {
+            if (!sel.worker) DumpSkippedGeometry(regs);
             LOG_WARNING(Render_Vulkan, "Geometry shader stage unsupported, skipping");
             return false;
         }

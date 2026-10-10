@@ -31,6 +31,10 @@ public:
         return buffer.Handle();
     }
 
+    [[nodiscard]] const VideoCore::Buffer* Storage() const noexcept {
+        return &buffer;
+    }
+
     /// Stage A: `size` bytes at `alignment`; returns the ring offset, or nullopt when the ring is
     /// still in use by the GPU (the caller leaves the binding to stage B).
     std::optional<u64> Allocate(u64 size, u64 alignment) {

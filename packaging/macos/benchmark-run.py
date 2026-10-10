@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from process_metrics import ResourceMonitor
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--prepared', type=Path, required=True, help='Directory containing boot-linked.bin and content.bin')
@@ -58,19 +59,20 @@ with log.open('xb') as stream:
     game = subprocess.Popen(command, env=env, stdout=stream, stderr=subprocess.STDOUT)
 (run/'pid.txt').write_text(str(game.pid))
 print('Run:', run, 'PID:', game.pid, flush=True)
-try:
-    result = subprocess.run([sys.executable, str(Path(__file__).with_name('camera-benchmark.py')), str(run), str(log),
-                             '--seconds', str(a.seconds), '--timeout', str(a.timeout), '--move-seconds', str(a.move_seconds), '--idle-seconds', str(a.idle_seconds)])
-finally:
-    (run/'pad.txt').write_text('')
-    if a.stop_after and game.poll() is None:
-        game.terminate()
-        try: game.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            print('Game did not exit after SIGTERM; PID:', game.pid, flush=True)
-if a.wait_for_exit and not a.stop_after and game.poll() is None:
-    print('Benchmark finished; game remains open. PID:', game.pid, flush=True)
-    game.wait()
+with ResourceMonitor(game.pid, run):
+    try:
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name('camera-benchmark.py')), str(run), str(log),
+                                 '--seconds', str(a.seconds), '--timeout', str(a.timeout), '--move-seconds', str(a.move_seconds), '--idle-seconds', str(a.idle_seconds)])
+    finally:
+        (run/'pad.txt').write_text('')
+        if a.stop_after and game.poll() is None:
+            game.terminate()
+            try: game.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print('Game did not exit after SIGTERM; PID:', game.pid, flush=True)
+    if a.wait_for_exit and not a.stop_after and game.poll() is None:
+        print('Benchmark finished; game remains open. PID:', game.pid, flush=True)
+        game.wait()
 if not a.stop_after and game.poll() not in (None, 0):
     failure = {'exit_code': game.returncode, 'time': datetime.datetime.now().isoformat(),
                'benchmark_exit_code': result.returncode, 'log': str(log)}
