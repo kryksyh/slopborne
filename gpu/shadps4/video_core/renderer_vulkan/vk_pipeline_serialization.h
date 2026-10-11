@@ -17,5 +17,10 @@ void RegisterShaderMeta(const Shader::Info& info,
                         const std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
                         const Shader::StageSpecialization& spec, size_t perm_hash, size_t perm_idx);
 void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx);
+/// bbport: the fetch shader the game generated for this permutation (guest memory, read now):
+/// with it the permutation can be rebuilt from the game's own shader files without the game.
+void RegisterFetchShader(const Shader::Info& info,
+                         const std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
+                         size_t perm_idx);
 
 } // namespace Vulkan

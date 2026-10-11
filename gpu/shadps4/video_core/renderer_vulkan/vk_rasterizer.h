@@ -344,6 +344,26 @@ private:
     void ResetBindings(bool is_compute);
     void RefreshBufferBindings();
 
+    /// bbport: a dispatch whose pipeline still compiles in the background is recorded once it
+    /// is ready, in order with the other deferred ones: dropping it would lose what it paints
+    /// (character textures). It is bound again then from its saved user data (current buffers
+    /// and images); the buffers it only reads are copied at the original point.
+    struct DeferredDispatch {
+        const ComputePipeline* pipeline;
+        AmdGpu::ComputeProgram cs;
+        std::vector<u32> user_data;
+        std::vector<u32> flat_user_data;
+        VAddr pgm_base;
+        Shader::PushData push_data;
+        std::unique_ptr<VideoCore::Buffer> snapshot;
+        std::vector<vk::DescriptorBufferInfo> snapshot_infos; ///< per buffer; null: bound again
+    };
+    std::deque<DeferredDispatch> deferred_dispatches;
+    std::deque<std::pair<u64, std::unique_ptr<VideoCore::Buffer>>> retired_snapshots;
+    const DeferredDispatch* replaying_dispatch = nullptr;
+    bool DeferDispatch(const ComputePipeline* pipeline);
+    void RecordDeferredDispatches();
+
     bool IsComputeMetaClear(const Pipeline* pipeline);
     bool IsComputeImageCopy(const Pipeline* pipeline);
     bool IsComputeImageClear(const Pipeline* pipeline);

@@ -49,9 +49,20 @@ const u32* GetFetchShaderCode(const Info& info, u32 sgpr_base) {
     return code;
 }
 
+// bbport: offline translation (tools/shader_regen.cpp) supplies the fetch shader data stored in
+// the pipeline cache: the fetch shader itself is in guest memory, which offline tools lack.
+thread_local const std::optional<FetchShaderData>* fetch_shader_override = nullptr;
+
+void SetFetchShaderOverride(const std::optional<FetchShaderData>* data) {
+    fetch_shader_override = data;
+}
+
 std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info) {
     if (!info.has_fetch_shader) {
         return std::nullopt;
+    }
+    if (fetch_shader_override) {
+        return *fetch_shader_override;
     }
 
     const auto* code = GetFetchShaderCode(info, info.fetch_shader_sgpr_base);

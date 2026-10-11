@@ -45,6 +45,7 @@ struct Program {
     struct Module {
         vk::ShaderModule module;
         Shader::StageSpecialization spec;
+        bool fetch_saved{}; ///< bbport: fetch shader stored (permutations from the cache warm-up)
     };
     static constexpr size_t MaxPermutations = 8;
     using ModuleList = boost::container::small_vector<Module, MaxPermutations>;
@@ -130,6 +131,8 @@ public:
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
 
+    /// While the pipeline compiles in the background: itself for an opaque draw once its
+    /// stand-in is ready (GraphicsPipeline::Handle), else nullptr and the draw is dropped.
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},
                                                 const PreparedDraw* prepared = nullptr,
                                                 bool allow_geometry = true);
@@ -204,6 +207,10 @@ private:
     const PreparedDraw* used_prepared = nullptr;
     tsl::robin_map<ComputePipelineKey, std::unique_ptr<ComputePipeline>> compute_pipelines;
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>> graphics_pipelines;
+    /// bbport: graphics pipeline compiles in the background (bbport.ini async_pipelines).
+    /// Declared after the pipelines: destroyed (its workers joined) before them.
+    std::unique_ptr<AsyncCompiler> async_compiler;
+    u64 skipped_draws{}; ///< draws skipped while their pipeline compiled
     PipelineSelection sel{}; ///< GPU thread selection state
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start

@@ -974,6 +974,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
     }
+    if (!deferred_dispatches.empty()) {
+        RecordDeferredDispatches();
+    }
     const auto& regs = Regs();
     // bbport: the pass copying a finished frame to a display buffer; the previous draw's
     // target is that frame.
@@ -1317,7 +1320,8 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         .vertex_sgpr_offset = vertex_sgpr_offset,
         .instance_sgpr_offset = instance_sgpr_offset,
     };
-    const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline(params, nullptr, geometry_candidate);
+    const GraphicsPipeline* pipeline =
+        pipeline_cache.GetGraphicsPipeline(params, nullptr, geometry_candidate);
     if (!pipeline) {
         return;
     }
@@ -1539,6 +1543,18 @@ void Rasterizer::DispatchDirect() {
     DispatchRecord(pipeline);
 }
 
+static void RecordMemoryBarrier(Scheduler& scheduler) {
+    scheduler.Record([](vk::CommandBuffer cmdbuf) {
+        const vk::MemoryBarrier2 barrier = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        };
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+    });
+}
+
 void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     BbStats::Timer stall_timer{BbStats::t_dispatch_record};
     runtime.MarkDrawStart();
@@ -1546,6 +1562,9 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     gbuffer_draw = false;
 
     scheduler.PopPendingOperations();
+    if (!deferred_dispatches.empty()) {
+        RecordDeferredDispatches();
+    }
 
     const auto& cs_program = CsRegs();
 
@@ -1576,11 +1595,35 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     scheduler.EndRendering();
+    const u32 dim_x = cs_program.dim_x, dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
+    if (replaying_dispatch) {
+        // What it read at the original point, and the offsets that copy was bound with.
+        size_t index = 0;
+        for (const auto& write : set_writes) {
+            for (u32 i = 0; write.pBufferInfo && i < write.descriptorCount; ++i, ++index) {
+                if (index < replaying_dispatch->snapshot_infos.size() &&
+                    replaying_dispatch->snapshot_infos[index].buffer) {
+                    const_cast<vk::DescriptorBufferInfo*>(write.pBufferInfo)[i] =
+                        replaying_dispatch->snapshot_infos[index];
+                }
+            }
+        }
+        push_data = replaying_dispatch->push_data;
+        RecordMemoryBarrier(scheduler);
+    } else if (!pipeline->IsReady()) {
+        if (DeferDispatch(pipeline)) {
+            ResetBindings(true);
+            scheduler.KickRecording();
+            return;
+        }
+        while (!pipeline->IsReady()) {
+            std::this_thread::yield();
+        }
+    }
     mark();
     pipeline->BindResources(set_writes, push_data);
 
     const vk::Pipeline handle = pipeline->Handle();
-    const u32 dim_x = cs_program.dim_x, dim_y = cs_program.dim_y, dim_z = cs_program.dim_z;
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
@@ -1592,6 +1635,123 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
 
     ResetBindings(true);
     scheduler.KickRecording();
+}
+
+bool Rasterizer::DeferDispatch(const ComputePipeline* pipeline) {
+    const auto& cs = pipeline->GetStage(Shader::SwStage::Compute);
+    size_t num_buffers = 0;
+    for (const auto& write : set_writes) {
+        if (write.pTexelBufferView) {
+            return false;
+        }
+        num_buffers += write.pBufferInfo ? write.descriptorCount : 0;
+    }
+    // The buffer descriptors follow the shader's buffer list (BindBuffers).
+    if (num_buffers != cs.buffers.size()) {
+        return false;
+    }
+    const auto user_data = cs.UserData();
+    const auto flat = cs.FlatUserData();
+    DeferredDispatch deferred{
+        .pipeline = pipeline,
+        .cs = CsRegs(),
+        .user_data = {user_data.begin(), user_data.end()},
+        .flat_user_data = {flat.begin(), flat.end()},
+        .pgm_base = cs.ProgramBase(),
+        .push_data = push_data,
+        .snapshot_infos = std::vector<vk::DescriptorBufferInfo>(num_buffers),
+    };
+    constexpr u64 SnapshotAlignment = 256;
+    u64 snapshot_size = 0;
+    size_t index = 0;
+    for (const auto& write : set_writes) {
+        for (u32 i = 0; write.pBufferInfo && i < write.descriptorCount; ++i, ++index) {
+            const auto& info = write.pBufferInfo[i];
+            const auto& desc = cs.buffers[index];
+            const bool ring = num_ring_stages && FindRingBinding(cs, u32(index));
+            const bool persistent =
+                desc.IsSpecial() && (desc.buffer_type == Shader::BufferType::GdsBuffer ||
+                                     desc.buffer_type == Shader::BufferType::BdaPagetable ||
+                                     desc.buffer_type == Shader::BufferType::FaultBuffer);
+            if (!info.buffer || persistent || (!desc.IsSpecial() && !ring && desc.is_written)) {
+                continue;
+            }
+            // Read only: copied now, the game rewrites constants every frame.
+            if (info.range == VK_WHOLE_SIZE) {
+                return false;
+            }
+            deferred.snapshot_infos[index] = {info.buffer, snapshot_size, info.range};
+            snapshot_size = Common::AlignUp(snapshot_size + info.range, SnapshotAlignment);
+        }
+    }
+    if (snapshot_size) {
+        deferred.snapshot = std::make_unique<VideoCore::Buffer>(
+            instance, 0, snapshot_size, VideoCore::MemoryType::DeviceLocal);
+        RecordMemoryBarrier(scheduler);
+        index = 0;
+        for (const auto& write : set_writes) {
+            for (u32 i = 0; write.pBufferInfo && i < write.descriptorCount; ++i, ++index) {
+                auto& snapshot = deferred.snapshot_infos[index];
+                if (!snapshot.buffer) {
+                    continue;
+                }
+                const vk::Buffer source = snapshot.buffer, dest = deferred.snapshot->Handle();
+                const vk::BufferCopy region{write.pBufferInfo[i].offset, snapshot.offset,
+                                            snapshot.range};
+                scheduler.Record([source, dest, region](vk::CommandBuffer cmdbuf) {
+                    cmdbuf.copyBuffer(source, dest, region);
+                });
+                snapshot.buffer = dest;
+            }
+        }
+    }
+    deferred_dispatches.push_back(std::move(deferred));
+    static u64 count = 0;
+    if (const u64 n = ++count; (n & (n - 1)) == 0) {
+        std::printf("Dispatch deferred until its pipeline compiles: %llu so far\n",
+                    static_cast<unsigned long long>(n));
+    }
+    return true;
+}
+
+void Rasterizer::RecordDeferredDispatches() {
+    if (replaying_dispatch) {
+        return;
+    }
+    while (!deferred_dispatches.empty() && deferred_dispatches.front().pipeline->IsReady()) {
+        auto& deferred = deferred_dispatches.front();
+        // The packet being recorded installed its own user data, constant rings and registers.
+        Shader::Info::UdSnapshot saved[Shader::Info::MaxUdSnapshots];
+        std::copy_n(Shader::Info::ud_snapshots, Shader::Info::MaxUdSnapshots, saved);
+        const u32 saved_snapshots = Shader::Info::num_ud_snapshots;
+        const u32 saved_rings = num_ring_stages;
+        const auto* saved_cs = stage_cs;
+        Shader::Info::ud_snapshots[0] = {
+            &deferred.pipeline->GetStage(Shader::SwStage::Compute),
+            deferred.user_data.data(),
+            u32(deferred.user_data.size()),
+            deferred.flat_user_data.data(),
+            u32(deferred.flat_user_data.size()),
+            deferred.pgm_base};
+        Shader::Info::num_ud_snapshots = 1;
+        num_ring_stages = 0;
+        stage_cs = &deferred.cs;
+        replaying_dispatch = &deferred;
+        DispatchRecord(deferred.pipeline);
+        RecordMemoryBarrier(scheduler);
+        replaying_dispatch = nullptr;
+        stage_cs = saved_cs;
+        num_ring_stages = saved_rings;
+        Shader::Info::num_ud_snapshots = saved_snapshots;
+        std::copy_n(saved, Shader::Info::MaxUdSnapshots, Shader::Info::ud_snapshots);
+        if (deferred.snapshot) {
+            retired_snapshots.emplace_back(scheduler.CurrentTick(), std::move(deferred.snapshot));
+        }
+        deferred_dispatches.pop_front();
+    }
+    while (!retired_snapshots.empty() && scheduler.IsFree(retired_snapshots.front().first)) {
+        retired_snapshots.pop_front();
+    }
 }
 
 void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
@@ -1616,6 +1776,13 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
 void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr address,
                                         u32 size) {
     scheduler.PopPendingOperations();
+    // Arguments written by the GPU: not deferred, so it waits for its pipeline.
+    while (!pipeline->IsReady()) {
+        std::this_thread::yield();
+    }
+    if (!deferred_dispatches.empty()) {
+        RecordDeferredDispatches();
+    }
     const u32 offset = 0;
 
     if (!BindResources(pipeline)) {
@@ -4277,6 +4444,10 @@ void Rasterizer::NoteFrameStart() {
         profiler->BeginFrame();
     }
     const u64 frame = BbStats::gpu_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+    static u64 draws_at_start = 0;
+    const u64 draws = BbStats::draws.load(std::memory_order_relaxed);
+    BbStats::last_frame_draws.store(draws - draws_at_start, std::memory_order_relaxed);
+    draws_at_start = draws;
     // BB_BUFFER_STATS=1: how many earlier frames the GPU has not finished when the GPU thread
     // starts a frame — the lag that decides whether guest memory can be read in place.
     static const bool stats = [] {

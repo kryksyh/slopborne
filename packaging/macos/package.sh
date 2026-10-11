@@ -49,6 +49,8 @@ cp run.py "$contents/Resources/port/"
 cp scripts/*.py "$contents/Resources/port/scripts/"
 cp patches/Bloodborne.xml "$contents/Resources/port/patches/"
 # The pipeline list (scripts/export_pipelines.py): built at first start from the player's game files.
+# Export it from ONE cache made by the build being packaged (permutation numbers are local to a
+# cache, and entries from other builds may not rebuild), e.g. replays into an empty cache.
 pipelines=${BB_PIPELINES:-out/macos/pipelines}
 if [[ -d $pipelines ]]; then
     mkdir -p "$contents/Resources/port/pipelines"

@@ -48,7 +48,7 @@ public:
                     const Shader::Profile& profile, vk::PipelineCache pipeline_cache,
                     ComputePipelineKey compute_key, const Shader::Info& info,
                     vk::ShaderModule module, SerializationSupport& sdata, bool preloading,
-                    u32 extra_storage_buffers = 0);
+                    u32 extra_storage_buffers = 0, AsyncCompiler* async = nullptr);
     ~ComputePipeline();
 
 private:

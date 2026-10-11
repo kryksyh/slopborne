@@ -18,6 +18,7 @@ enum class BlobType : u32 {
     ShaderBinary,
     PipelineKey,
     ShaderProfile,
+    FetchShader, ///< bbport: a vertex shader permutation's fetch shader code (offline rebuilds)
 };
 
 class DataBase {

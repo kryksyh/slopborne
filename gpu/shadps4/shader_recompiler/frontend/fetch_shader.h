@@ -75,4 +75,7 @@ const u32* GetFetchShaderCode(const Info& info, u32 sgpr_base);
 
 std::optional<FetchShaderData> ParseFetchShader(const Shader::Info& info);
 
+/// bbport: while set (non-null), ParseFetchShader returns this instead of reading guest memory.
+void SetFetchShaderOverride(const std::optional<FetchShaderData>* data);
+
 } // namespace Shader::Gcn

@@ -7,6 +7,15 @@
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <thread>
+#include <vector>
+
 #include <boost/container/small_vector.hpp>
 
 namespace Shader {
@@ -15,6 +24,32 @@ struct PushData;
 } // namespace Shader
 
 namespace Vulkan {
+
+/// bbport: driver pipeline compiles (MoltenVK: the Metal compile, 10-200 ms) off the GPU command
+/// thread. A pipeline is published to draws once its compile finished (Pipeline::IsReady);
+/// until then its draws are skipped instead of stalling the frame.
+class AsyncCompiler {
+public:
+    explicit AsyncCompiler(u32 num_threads);
+    ~AsyncCompiler();
+    void Submit(std::function<void()>&& job);
+    /// Ahead of the queued compiles (a stand-in a draw is waiting for).
+    void SubmitFront(std::function<void()>&& job);
+    /// The warm-up queued all its compiles: reported once they are done.
+    void MarkWarmUpQueued();
+
+private:
+    void Worker(std::stop_token stop);
+
+    std::mutex mutex;
+    std::condition_variable_any cv;
+    std::deque<std::function<void()>> jobs;
+    std::vector<std::jthread> threads;
+    // Reports when the compiles the warm-up queued are done.
+    std::atomic<u64> submitted{0}, done{0}, warm_up{0};
+    std::atomic<bool> reported{false};
+    std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+};
 
 static constexpr auto AllGraphicsStageBits =
     vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eTessellationControl |
@@ -34,6 +69,11 @@ public:
 
     vk::Pipeline Handle() const noexcept {
         return *pipeline;
+    }
+
+    /// bbport: false while the driver compile runs on the AsyncCompiler.
+    bool IsReady() const noexcept {
+        return ready.load(std::memory_order_acquire);
     }
 
     vk::PipelineLayout GetLayout() const noexcept {
@@ -73,6 +113,7 @@ protected:
     std::array<const Shader::Info*, Shader::MaxStageTypes> stages{};
     bool uses_push_descriptors{};
     bool is_compute;
+    std::atomic<bool> ready{true};
 };
 
 } // namespace Vulkan

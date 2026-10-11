@@ -171,6 +171,16 @@
  "Применить и перезапустить игру"},
 {"Other",
  "Прочее"},
+{"Experimental async shader compilation",
+ "Экспериментальная фоновая компиляция шейдеров"},
+{"Removes the stutter when something is seen for the first time: a new area, enemy "
+ "or attack. The first time only, an enemy or character can show for a moment as a "
+ "plain dark figure or not at all, an effect can be missing for a moment, and "
+ "loading screens can take a little longer. Applies after a game restart.",
+ "Убирает подтормаживания, когда что-то появляется впервые: новая локация, враг или "
+ "атака. Только в первый раз враг или персонаж может на мгновение выглядеть как "
+ "тёмная фигура или пропасть, эффект может ненадолго не отобразиться, а загрузки "
+ "могут идти немного дольше. Применяется после перезапуска игры."},
 {"FPS counter in the corner",
  "Счётчик FPS в углу"},
 {"Close",

@@ -422,7 +422,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         static_cast<unsigned long long>(vol - last_vol));
         }
         if (frame_ms > 40.0 && frames_seen) {
-            std::printf("       ms in: resident %.1f, protect %.1f, image create %.1f, "
+            std::printf("       ms in: resident %.1f, protect %.1f, image/view create %.1f, "
                         "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
                         (t_now[0] - last_t[0]) / 1e6, (t_now[1] - last_t[1]) / 1e6,
                         (t_now[2] - last_t[2]) / 1e6, (t_now[3] - last_t[3]) / 1e6,

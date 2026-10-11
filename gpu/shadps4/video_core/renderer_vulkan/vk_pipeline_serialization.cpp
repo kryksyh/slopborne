@@ -1,13 +1,20 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
+#include <fstream>
+
 #include "common/serdes.h"
 #include "core/emulator_settings.h"
 #include "shader_recompiler/frontend/fetch_shader.h"
+#include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/ir/passes/ir_passes.h"
+#include "shader_recompiler/recompiler.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 namespace Serialization {
@@ -79,6 +86,20 @@ void RegisterShaderMeta(const Shader::Info& info,
 
     Storage::DataBase::Instance().Save(Storage::BlobType::ShaderMeta,
                                        fmt::format("{:#018x}", perm_hash), ar.TakeOff());
+    RegisterFetchShader(info, fetch_shader_data, perm_idx);
+}
+
+void RegisterFetchShader(const Shader::Info& info,
+                         const std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
+                         size_t perm_idx) {
+    if (!Storage::DataBase::Instance().IsOpened() || !info.has_fetch_shader || !fetch_shader_data) {
+        return;
+    }
+    const auto* code = reinterpret_cast<const u8*>(
+        Shader::Gcn::GetFetchShaderCode(info, info.fetch_shader_sgpr_base));
+    Storage::DataBase::Instance().Save(Storage::BlobType::FetchShader,
+                                       fmt::format("{:#018x}_{}", info.pgm_hash, perm_idx),
+                                       std::vector<u8>(code, code + fetch_shader_data->size));
 }
 
 void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx) {
@@ -245,13 +266,75 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
 
     it.value() = std::make_unique<GraphicsPipeline>(
         instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-        sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true);
+        sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true, nullptr,
+        async_compiler.get());
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
     sel.fetch_shader.reset();
 
     return true;
+}
+
+// bbport: a cached permutation without SPIR-V (the pipeline list shipped with the macOS app has
+// none: it holds no game code) is rebuilt from the game's own shader program, found in the game's
+// files by scripts/game_shaders.py (BB_SHADER_PROGRAMS_DIR), as CompileModule translated it in the
+// game: the stored specialization, flattened user data and fetch shader stand in for guest memory.
+static std::vector<u32> RebuildShaderBinary(const Shader::Info& stored,
+                                            const Shader::StageSpecialization& spec,
+                                            size_t perm_idx, const Shader::Profile& profile,
+                                            Shader::Pools& pools) {
+    static const char* programs_dir = std::getenv("BB_SHADER_PROGRAMS_DIR");
+    if (!programs_dir || !*programs_dir) {
+        return {};
+    }
+    // Tessellation and geometry stages read constants from guest memory while translating
+    // (absent at start): those are compiled when the game first draws with them.
+    using Shader::HwStage, Shader::SwStage;
+    const bool plain = (stored.hw_stage == HwStage::Fragment && stored.sw_stage == SwStage::Fragment) ||
+                       (stored.hw_stage == HwStage::Vertex && stored.sw_stage == SwStage::Vertex) ||
+                       (stored.hw_stage == HwStage::Compute && stored.sw_stage == SwStage::Compute);
+    if (!plain) {
+        return {};
+    }
+    const auto name = fmt::format("{:#018x}", stored.pgm_hash);
+    std::vector<u32> code;
+    {
+        std::ifstream file(std::filesystem::path{programs_dir} / (name + ".bin"), std::ios::binary);
+        const std::vector<char> bytes{std::istreambuf_iterator<char>(file), {}};
+        if (bytes.empty() || bytes.size() % sizeof(u32)) {
+            return {};
+        }
+        code.resize(bytes.size() / sizeof(u32));
+        std::memcpy(code.data(), bytes.data(), bytes.size());
+    }
+    std::array<u32, Shader::ShaderParams::NumShaderUserData> user_data{};
+    std::memcpy(user_data.data(), stored.flattened_ud_buf.data(),
+                std::min(sizeof(user_data), stored.flattened_ud_buf.size() * sizeof(u32)));
+    std::vector<u32> fetch_code;
+    if (stored.has_fetch_shader) {
+        std::vector<u8> bytes;
+        Storage::DataBase::Instance().Load(Storage::BlobType::FetchShader,
+                                           fmt::format("{}_{}", name, perm_idx), bytes);
+        if (bytes.empty() || bytes.size() % sizeof(u32)) {
+            return {};
+        }
+        fetch_code.resize(bytes.size() / sizeof(u32) + 4); // the decoder reads ahead
+        std::memcpy(fetch_code.data(), bytes.data(), bytes.size());
+        const auto address = reinterpret_cast<u64>(fetch_code.data());
+        std::memcpy(&user_data[stored.fetch_shader_sgpr_base], &address, sizeof(address));
+    }
+    const Shader::ShaderParams params{.user_data = user_data, .code = code, .hash = stored.pgm_hash};
+    Shader::Info info{stored.hw_stage, stored.sw_stage, params};
+    auto runtime_info = spec.runtime_info;
+    auto binding = spec.start;
+    Shader::Gcn::SetFetchShaderOverride(&spec.fetch_shader_data);
+    Shader::Optimization::SetFlatBufOverride(&stored.flattened_ud_buf);
+    const auto program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
+    auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, program, binding);
+    Shader::Gcn::SetFetchShaderOverride(nullptr);
+    Shader::Optimization::SetFlatBufOverride(nullptr);
+    return spv;
 }
 
 bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) {
@@ -268,7 +351,11 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
                                        fmt::format("{:#018x}_{}", program->info.pgm_hash, perm_idx),
                                        spv);
     if (spv.empty()) {
-        return false;
+        spv = RebuildShaderBinary(program->info, spec, perm_idx, profile, pools);
+        if (spv.empty()) {
+            return false;
+        }
+        RegisterShaderBinary(std::vector<u32>{spv}, program->info.pgm_hash, perm_idx);
     }
 
     // Permutation hash depends on shader variation index. To prevent collisions, we need insert it
@@ -318,13 +405,19 @@ void PipelineCache::WarmUp() {
     std::vector<u8> profile_data{};
     Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
     if (profile_data.empty()) {
-        Storage::DataBase::Instance().FinishPreload();
-
+        const bool archived = EmulatorSettings.IsPipelineCacheArchived();
+        if (archived) {
+            Storage::DataBase::Instance().FinishPreload();
+        }
         profile_data.resize(sizeof(profile));
         std::memcpy(profile_data.data(), &profile, sizeof(profile));
         Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return;
+                                           std::vector<u8>{profile_data});
+        // bbport: a new cache may hold the pipeline list shipped with the macOS app (no SPIR-V:
+        // rebuilt for this GPU while loading), so this GPU's profile is recorded and it loads.
+        if (archived) {
+            return;
+        }
     }
     if (profile_data.size() != sizeof(Shader::Profile)) {
         LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
@@ -380,6 +473,9 @@ void PipelineCache::WarmUp() {
         });
 
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
+    if (async_compiler) {
+        async_compiler->MarkWarmUpQueued();
+    }
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);

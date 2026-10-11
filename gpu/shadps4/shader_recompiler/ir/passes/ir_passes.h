@@ -27,6 +27,8 @@ void DeadCodeEliminationPass(IR::Program& program);
 void InterpolatedIntegerPass(IR::Program& program);
 void ConstantPropagationPass(IR::BlockList& program);
 void FlattenExtendedUserdataPass(IR::Program& program);
+/// bbport: while set (non-null), the pass uses this flattened user data instead of the SRT walker.
+void SetFlatBufOverride(const std::vector<u32>* data);
 void ReadLaneEliminationPass(IR::Program& program);
 ResourceDiscoveryList ResourceDiscoverPass(IR::Program& program, const Profile& profile);
 void ResourcePatchingPass(Shader::Info& info, const ResourceDiscoveryList& sharp_usages,

@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "bbport_settings.h"
 #include "common/hash.h"
 #include "common/io_file.h"
 #include "common/path_util.h"
@@ -343,6 +344,12 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, liverpool{liverpool_},
       desc_heap{instance, scheduler.GetWorkSemaphore(), DescriptorHeapSizes} {
     sel.regs = &liverpool->regs;
+    if (BbSettings::Get().startup_async_pipelines) {
+        // Six: the warm-up hands every cached pipeline to them at start (a cold Metal cache
+        // compiles each for tens of milliseconds) while the game still boots and the CPU is
+        // mostly free; the game itself rarely queues more than a few.
+        async_compiler = std::make_unique<AsyncCompiler>(6);
+    }
     const auto& vk12_props = instance.GetVk12Properties();
     profile = Shader::Profile{
         .max_viewport_width = instance.GetMaxViewportWidth(),
@@ -484,7 +491,9 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
         }
     }
     const auto it = graphics_pipelines.find(prepared.key);
-    return it != graphics_pipelines.end() ? it->second.get() : nullptr;
+    return it != graphics_pipelines.end() && it->second->IsReady() && !it->second->Failed()
+               ? it->second.get()
+               : nullptr;
 }
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params,
@@ -510,7 +519,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry);
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry,
+            async_compiler.get());
 
         if (!sel.geometry) RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         ++num_new_pipelines;
@@ -523,6 +533,44 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 }
             }
         }
+        sel.fetch_shader.reset();
+    }
+    // While a loading screen or menu is up (few draws), a draw into a texture image waits for
+    // its pipeline: textures composed once there (a character's face) would keep the missing
+    // draw. In gameplay nothing waits.
+    constexpr u64 LoadingScreenDraws = 600;
+    if (!it->second->IsReady() &&
+        BbStats::last_frame_draws.load(std::memory_order_relaxed) < LoadingScreenDraws) {
+        const auto& regs = *sel.regs;
+        bool texture_target = false;
+        for (u32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS; ++cb) {
+            if (regs.color_buffers[cb] && regs.color_target_mask.GetMask(cb)) {
+                texture_target |= regs.color_buffers[cb].Pitch() != 1920;
+            }
+        }
+        while (texture_target && !it->second->IsReady()) {
+            std::this_thread::yield();
+        }
+    }
+    const auto& draw_regs = *sel.regs;
+    // Opaque geometry: depth tested and written (full screen passes compare Always or Never).
+    const auto depth_func = draw_regs.depth_control.depth_func;
+    const bool opaque = draw_regs.depth_control.depth_enable &&
+                        draw_regs.depth_control.depth_write_enable &&
+                        depth_func != AmdGpu::CompareFunc::Always &&
+                        depth_func != AmdGpu::CompareFunc::Never;
+    if (!it->second->IsReady() && it->second->StandInReady() && opaque) {
+        return it->second.get();
+    }
+    if (!it->second->IsReady()) {
+        ++skipped_draws;
+        return nullptr;
+    }
+    if (it->second->Failed()) {
+        GraphicsPipeline::SerializationSupport sdata{};
+        it.value() = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry);
         sel.fetch_shader.reset();
     }
     return it->second.get();
@@ -541,7 +589,8 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],
-                                                       sel.modules[0], sdata, false);
+                                                       sel.modules[0], sdata, false, 0,
+                                                       async_compiler.get());
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
 
@@ -1168,6 +1217,10 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         module = it->module;
         perm_idx = std::distance(program->modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
+        if (!it->fetch_saved) {
+            it->fetch_saved = true;
+            RegisterFetchShader(info, it->spec.fetch_shader_data, perm_idx);
+        }
     }
     return std::make_tuple(&program->info, module,
                            program->modules[perm_idx].spec.fetch_shader_data, perm_hash);

@@ -749,6 +749,10 @@ void SimplifyReadConstAddressAdd(IR::Inst& inst) {
 
 } // Anonymous namespace
 
+// bbport: offline translation (tools/shader_regen.cpp) supplies the flattened user data stored in
+// the pipeline cache instead of running the SRT walker over guest memory, which it lacks.
+thread_local const std::vector<u32>* flat_buf_override = nullptr;
+
 void FlattenExtendedUserdataPass(IR::Program& program) {
     auto& post_order = program.post_order_blocks;
     PassInfo pass_info;
@@ -861,7 +865,15 @@ void FlattenExtendedUserdataPass(IR::Program& program) {
         SetFlatbufOffset(readconst, GetFlatbufOffset(original));
     }
 
-    program.info.RefreshFlatBuf();
+    if (flat_buf_override) {
+        program.info.flattened_ud_buf = *flat_buf_override;
+    } else {
+        program.info.RefreshFlatBuf();
+    }
+}
+
+void SetFlatBufOverride(const std::vector<u32>* data) {
+    flat_buf_override = data;
 }
 
 } // namespace Shader::Optimization
@@ -879,6 +891,8 @@ namespace Optimization {
 void FlattenExtendedUserdataPass(IR::Program& program) {
     UNREACHABLE_MSG("FlattenExtendedUserdataPass unimplemented for target architecture.");
 }
+
+void SetFlatBufOverride(const std::vector<u32>*) {}
 
 } // namespace Optimization
 

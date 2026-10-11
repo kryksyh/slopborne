@@ -6,6 +6,7 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 
+#include "common/thread.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -21,6 +22,65 @@ Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorH
       is_compute{is_compute_} {}
 
 Pipeline::~Pipeline() = default;
+
+AsyncCompiler::AsyncCompiler(u32 num_threads) {
+    for (u32 i = 0; i < num_threads; ++i) {
+        threads.emplace_back([this](std::stop_token stop) { Worker(stop); });
+    }
+}
+
+AsyncCompiler::~AsyncCompiler() {
+    for (auto& thread : threads) {
+        thread.request_stop();
+    }
+    cv.notify_all();
+    threads.clear(); // joins; a running compile finishes first
+}
+
+void AsyncCompiler::Submit(std::function<void()>&& job) {
+    submitted.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::scoped_lock lock{mutex};
+        jobs.push_back(std::move(job));
+    }
+    cv.notify_one();
+}
+
+void AsyncCompiler::SubmitFront(std::function<void()>&& job) {
+    submitted.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::scoped_lock lock{mutex};
+        jobs.push_front(std::move(job));
+    }
+    cv.notify_one();
+}
+
+void AsyncCompiler::MarkWarmUpQueued() {
+    warm_up.store(submitted.load(std::memory_order_relaxed), std::memory_order_release);
+}
+
+void AsyncCompiler::Worker(std::stop_token stop) {
+    Common::SetCurrentThreadName("bb:PipelineCompile");
+    while (true) {
+        std::function<void()> job;
+        {
+            std::unique_lock lock{mutex};
+            if (!cv.wait(lock, stop, [this] { return !jobs.empty(); })) {
+                return;
+            }
+            job = std::move(jobs.front());
+            jobs.pop_front();
+        }
+        job();
+        const u64 finished = done.fetch_add(1, std::memory_order_acq_rel) + 1;
+        const u64 target = warm_up.load(std::memory_order_acquire);
+        if (target && finished >= target && !reported.exchange(true)) {
+            const auto seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started);
+            std::printf("Pipeline warm-up: %llu pipelines compiled %.1f s after start\n",
+                        static_cast<unsigned long long>(target), seconds.count());
+        }
+    }
+}
 
 
 void Pipeline::BindResources(DescriptorWrites& set_writes,

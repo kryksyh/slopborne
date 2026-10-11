@@ -78,6 +78,9 @@ struct Values {
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{0};
+    /// Driver pipeline compiles in the background: a new object's first draws are skipped for a
+    /// moment instead of the frame waiting (PipelineCache; read at start).
+    std::atomic<bool> async_pipelines{true};
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false};
@@ -93,6 +96,7 @@ struct Values {
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
+    bool startup_async_pipelines = true;
 };
 
 Values& Get();

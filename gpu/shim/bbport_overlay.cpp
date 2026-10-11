@@ -413,6 +413,7 @@ void Menu() {
     bool restart = s.object_motion != s.startup_object_motion ||
                    s.model_lod != s.startup_model_lod ||
                    s.live_resolution != s.startup_live_resolution ||
+                   s.async_pipelines != s.startup_async_pipelines ||
                    BbSettings::ResolutionNeedsRestart();
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         restart |= s.effects[e] != s.startup_effects[e];
@@ -428,6 +429,11 @@ void Menu() {
 
     ImGui::SeparatorText(T("Other"));
     Checkbox(T("FPS counter in the corner"), s.show_fps);
+    Checkbox(T("Experimental async shader compilation"), s.async_pipelines);
+    Hint(T("Removes the stutter when something is seen for the first time: a new area, enemy "
+           "or attack. The first time only, an enemy or character can show for a moment as a "
+           "plain dark figure or not at all, an effect can be missing for a moment, and "
+           "loading screens can take a little longer. Applies after a game restart."));
 
     ImGui::Spacing();
     if (ImGui::Button(T("Close"))) {

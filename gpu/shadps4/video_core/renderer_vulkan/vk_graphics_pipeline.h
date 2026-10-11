@@ -99,8 +99,23 @@ public:
                      std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
                      std::optional<const Shader::Gcn::FetchShaderData> fetch_shader,
                      std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
-                     bool preloading, const GeometryReplayStages* geometry = nullptr);
+                     bool preloading, const GeometryReplayStages* geometry = nullptr,
+                     AsyncCompiler* async = nullptr);
     ~GraphicsPipeline();
+
+    /// bbport: while the pipeline compiles in the background, opaque draws use a stand-in with
+    /// the same vertex stage and a constant color (compiled first: no fragment shader to build).
+    bool StandInReady() const noexcept {
+        return stand_in_ready.load(std::memory_order_acquire);
+    }
+    vk::Pipeline Handle() const noexcept {
+        return IsReady() || !StandInReady() ? *pipeline : *stand_in;
+    }
+
+    /// bbport: the background or preloaded compile failed; the cache compiles it again.
+    bool Failed() const noexcept {
+        return failed.load(std::memory_order_acquire);
+    }
 
     const std::optional<const Shader::Gcn::FetchShaderData>& GetFetchShader() const noexcept {
         return fetch_shader;
@@ -111,6 +126,21 @@ public:
     const GraphicsPipelineKey& GetGraphicsKey() const {
         return key;
     }
+
+    void Create(vk::PipelineCache pipeline_cache, const vk::GraphicsPipelineCreateInfo& pipeline_info,
+                const std::string& debug_str, bool may_fail);
+    void CompileNow();
+    void QueueStandIn(AsyncCompiler& async);
+
+    /// bbport: create-info of a compile handed to the AsyncCompiler, until it ran.
+    struct CreateInfo;
+    std::shared_ptr<CreateInfo> pending;
+    vk::UniqueShaderModule stand_in_module;
+    vk::UniquePipeline stand_in;
+    std::atomic<bool> stand_in_ready{false};
+    vk::PipelineCache pending_cache;
+    std::string pending_name;
+    std::atomic<bool> failed{false};
 
     /// Gets the attributes and bindings for vertex inputs.
     template <typename Attribute, typename Binding>
