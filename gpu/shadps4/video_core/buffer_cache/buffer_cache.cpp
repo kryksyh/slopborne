@@ -617,6 +617,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,
                                     bool is_written, bool is_texel_buffer) {
+    BbStats::Timer stall_timer{BbStats::t_buffer_sync};
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};

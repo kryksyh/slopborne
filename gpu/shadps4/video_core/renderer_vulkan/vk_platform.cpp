@@ -14,6 +14,14 @@
 #endif
 
 #include <vector>
+#ifndef _WIN32
+#include <atomic>
+#include <cstdio>
+#include <cstring>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <pthread.h>
+#endif
 #include <fmt/ranges.h>
 
 #include "common/assert.h"
@@ -420,6 +428,51 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
 
     return std::move(instance);
 }
+
+#ifndef _WIN32
+// bbport: a command recorded into a command buffer that is not begun is dropped by MoltenVK,
+// and a later draw in the same buffer then crashes the submission (null binding). The first
+// such error prints the recording thread's call chain: it names the recording code.
+static VKAPI_ATTR VkBool32 VKAPI_CALL ErrorBacktraceCallback(
+    vk::DebugUtilsMessageSeverityFlagBitsEXT, vk::DebugUtilsMessageTypeFlagsEXT,
+    const vk::DebugUtilsMessengerCallbackDataEXT* callback_data, void*) {
+    static std::atomic<bool> reported{false};
+    if (!callback_data->pMessage || !std::strstr(callback_data->pMessage, "vkBeginCommandBuffer") ||
+        reported.exchange(true)) {
+        return VK_FALSE;
+    }
+    char name[64] = {};
+    pthread_getname_np(pthread_self(), name, sizeof(name));
+    std::fprintf(stderr, "Recording outside a begun command buffer (thread %s): %s\n", name,
+                 callback_data->pMessage);
+    void* frames[48];
+    const int depth = backtrace(frames, 48);
+    for (int i = 1; i < depth; ++i) {
+        Dl_info where{};
+        if (dladdr(frames[i], &where) && where.dli_fname) {
+            std::fprintf(stderr, "  #%d %s+0x%lx (%s)\n", i, where.dli_fname,
+                         static_cast<unsigned long>(reinterpret_cast<uintptr_t>(frames[i]) -
+                                                    reinterpret_cast<uintptr_t>(where.dli_fbase)),
+                         where.dli_sname ? where.dli_sname : "?");
+        } else {
+            std::fprintf(stderr, "  #%d %p\n", i, frames[i]);
+        }
+    }
+    return VK_FALSE;
+}
+
+vk::UniqueDebugUtilsMessengerEXT CreateErrorBacktraceCallback(vk::Instance instance) {
+    const vk::DebugUtilsMessengerCreateInfoEXT msg_ci = {
+        .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eError,
+        .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+                       vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation,
+        .pfnUserCallback = ErrorBacktraceCallback,
+    };
+    auto [result, messenger] = instance.createDebugUtilsMessengerEXTUnique(msg_ci);
+    return result == vk::Result::eSuccess ? std::move(messenger)
+                                          : vk::UniqueDebugUtilsMessengerEXT{};
+}
+#endif
 
 vk::UniqueDebugUtilsMessengerEXT CreateDebugCallback(vk::Instance instance) {
     const vk::DebugUtilsMessengerCreateInfoEXT msg_ci = {

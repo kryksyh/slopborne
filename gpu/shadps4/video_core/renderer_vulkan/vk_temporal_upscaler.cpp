@@ -1854,7 +1854,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
 }
 
 bool TemporalUpscaler::RedirectDepth(VideoCore::ImageId depth, Target& target) {
-    if (!ui_phase || depth != ui_depth) {
+    if (!ui_phase || depth != ui_depth || ui_depth_kept) {
         return false;
     }
     target = {*ui_depth_view, vk::ImageLayout::eGeneral, ui_width, ui_height, true};

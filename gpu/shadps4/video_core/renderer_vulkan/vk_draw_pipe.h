@@ -205,7 +205,10 @@ private:
                 continue;
             }
             const u64 start = __rdtsc();
-            handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
+            {
+                BbStats::Timer timer{BbStats::t_stage_b};
+                handler(context, reinterpret_cast<const u8*>(header + 1), header->payload);
+            }
             busy_cycles.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
             at += header->size;
             consumed.store(at, std::memory_order_release);

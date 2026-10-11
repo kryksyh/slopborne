@@ -108,6 +108,11 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
     if (enable_validation) {
         debug_callback = CreateDebugCallback(*instance);
     }
+#ifndef _WIN32
+    else {
+        debug_callback = CreateErrorBacktraceCallback(*instance);
+    }
+#endif
     const std::size_t num_physical_devices = static_cast<u16>(physical_devices.size());
     ASSERT_MSG(num_physical_devices > 0, "No physical devices found");
     LOG_INFO(Render_Vulkan, "Found {} physical devices", num_physical_devices);

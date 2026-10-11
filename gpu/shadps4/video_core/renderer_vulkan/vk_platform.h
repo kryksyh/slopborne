@@ -27,6 +27,10 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
 
 vk::UniqueDebugUtilsMessengerEXT CreateDebugCallback(vk::Instance instance);
 
+#ifndef _WIN32
+vk::UniqueDebugUtilsMessengerEXT CreateErrorBacktraceCallback(vk::Instance instance);
+#endif
+
 template <typename T>
 concept VulkanHandleType = vk::isVulkanHandleType<T>::value;
 

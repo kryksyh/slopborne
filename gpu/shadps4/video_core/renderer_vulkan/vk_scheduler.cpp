@@ -145,6 +145,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     }
     EndRendering();
     is_rendering = true;
+    ++pass_serial;
     render_state = new_state;
 
     std::array<vk::RenderingAttachmentInfo, 8> color_attachments;
@@ -195,6 +196,29 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         current_cmdbuf.beginRendering(rendering_info);
         return;
     }
+    if (IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PrePassCopies)) {
+        // RecordHost() work of the pass must not overtake host work recorded before it.
+        KickRecording(true);
+        auto ops = std::make_unique<PrePass>();
+        pre_pass = ops.get();
+        Record([ops = std::move(ops)](vk::CommandBuffer cmdbuf) {
+            if (ops->empty()) {
+                return;
+            }
+            const vk::MemoryBarrier2 barrier = {
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask =
+                    vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            };
+            cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+            for (auto& op : *ops) {
+                op(vk::CommandBuffer{cmdbuf});
+            }
+            cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+        });
+    }
     // The attachment infos live on this stack frame: the recorded closure keeps copies.
     Record([info = rendering_info, color_attachments, depth_attachment,
             stencil_attachment](vk::CommandBuffer cmdbuf) mutable {
@@ -219,6 +243,7 @@ void Scheduler::EndRendering() {
         ended_by_caller = __builtin_return_address(1);
     }
     is_rendering = false;
+    pre_pass = nullptr;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
 }
 
@@ -277,13 +302,40 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     }
     BbCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
+    // Not ahead of the commands before it: the guest, told earlier, recycles command buffers
+    // sooner (PM4 parse faults on loads). A held pass delays it to the pass's handoff.
     Record([signal = std::move(signal), done = deferred_signals_done](vk::CommandBuffer) mutable {
         BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
             signal();
             done->fetch_add(1, std::memory_order_release);
         });
     });
-    KickRecording(true);
+    if (!pre_pass) {
+        KickRecording(true);
+    }
+}
+
+void Scheduler::QueueLane() {
+    if (lane_chunk && !lane_chunk->Empty()) {
+        recorder_queue.push_back(std::move(lane_chunk));
+    }
+}
+
+void Scheduler::KickHost() {
+    if (!pre_pass) {
+        KickRecording(true);
+        return;
+    }
+    bool wake;
+    {
+        std::scoped_lock lk{recorder_mutex};
+        QueueLane();
+        wake = recorder_sleeping;
+        queued_chunks.store(recorder_queue.size(), std::memory_order_release);
+    }
+    if (wake) {
+        recorder_cv.notify_one();
+    }
 }
 
 void Scheduler::WaitDeferredSignals() {
@@ -305,7 +357,7 @@ void Scheduler::WaitHostCopies() {
     if (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
         BbStats::WaitTimer timer{BbStats::host_copies_wait_ns};
         BbStats::host_copy_waits.fetch_add(1, std::memory_order_relaxed);
-        KickRecording(true);
+        KickHost();
         while (host_copies_done.load(std::memory_order_acquire) < host_copies_issued) {
             std::this_thread::yield();
         }
@@ -320,16 +372,27 @@ void Scheduler::KickRecording(bool force) {
     }
     // Callers kick where nobody holds the raw command buffer: deferral resumes.
     direct_mode = false;
+    // A pass keeps its chunks (up to 1 MiB) so RecordBeforePass() can still add to its start;
+    // guest memory copies go ahead as before.
+    if (!force && pre_pass) {
+        if (lane_chunk && !lane_chunk->Empty()) {
+            KickHost();
+        }
+        if (full_chunks.size() < 8) {
+            return;
+        }
+    }
     // Batches of tens of KiB keep the queue handoff cheap relative to the work it carries.
     if (!force && full_chunks.empty() && record_chunk->Size() < 32 * 1024) {
         return;
     }
-    if (full_chunks.empty() && record_chunk->Empty()) {
+    if (full_chunks.empty() && record_chunk->Empty() && !lane_chunk) {
         return;
     }
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
+        QueueLane();
         for (auto& chunk : full_chunks) {
             recorder_queue.push_back(std::move(chunk));
         }
@@ -340,6 +403,7 @@ void Scheduler::KickRecording(bool force) {
         queued_chunks.store(recorder_queue.size(), std::memory_order_release);
     }
     full_chunks.clear();
+    pre_pass = nullptr;
     // A busy recorder picks the new chunks up by itself: waking it is a syscall per draw.
     if (wake) {
         recorder_cv.notify_one();
@@ -497,6 +561,7 @@ void Scheduler::BeginPrologue() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    BbStats::Timer stall_timer{BbStats::t_submit};
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 

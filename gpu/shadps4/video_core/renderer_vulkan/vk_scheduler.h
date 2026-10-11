@@ -816,11 +816,52 @@ public:
         return is_rendering;
     }
 
+    /// bbport: records `func(cmdbuf)` ahead of the current render pass and behind everything
+    /// recorded before the pass, with full barriers on both sides. Fails once the pass's
+    /// commands went to the recording thread (or without a pass).
+    template <typename Func>
+    bool RecordBeforePass(Func&& func) {
+        if (!pre_pass) {
+            return false;
+        }
+        pre_pass->emplace_back(std::forward<Func>(func));
+        return true;
+    }
+
+    /// bbport: host work (no commands, nothing the guest is told about) in order with the host
+    /// work recorded before it. While a pass holds its chunks back, it goes to the recording
+    /// thread ahead of them.
+    template <typename Func>
+    void RecordHost(Func&& func) {
+        if (!pre_pass) {
+            Record(std::forward<Func>(func));
+            return;
+        }
+        if (!lane_chunk) {
+            lane_chunk = AcquireChunk();
+        }
+        if (!lane_chunk->Push(std::forward<Func>(func))) {
+            KickHost();
+            lane_chunk = AcquireChunk();
+            const bool pushed = lane_chunk->Push(std::forward<Func>(func));
+            ASSERT(pushed);
+        }
+    }
+
+    /// Hands RecordHost() work to the recording thread (all recorded commands, unless a pass
+    /// holds them back).
+    void KickHost();
+
+    /// Counts render passes begun (a pass identity for per-pass tracking).
+    [[nodiscard]] u64 PassSerial() const noexcept {
+        return pass_serial;
+    }
+
     /// Runs `copy` on the recording thread in order with the commands (the thread spins for
     /// work anyway, so small copies cost no wakeup); WaitHostCopies() covers it.
     template <typename Func>
     void RecordHostCopy(Func&& copy) {
-        Record([copy = std::forward<Func>(copy), this,
+        RecordHost([copy = std::forward<Func>(copy), this,
                 seq = ++host_copies_issued](vk::CommandBuffer) {
             copy();
             host_copies_done.store(seq, std::memory_order_release);
@@ -837,6 +878,14 @@ public:
     /// the write cannot overtake an earlier fence. Otherwise the guest, seeing the later value,
     /// may free memory the earlier fence then writes into (corrupted heap, guest fault).
     void WaitDeferredSignals();
+
+    /// Hands deferred signals still held with a render pass's commands to the recording thread.
+    void KickDeferredSignals() {
+        if (deferred_signals_done->load(std::memory_order_acquire) <
+            deferred_signals_issued.load(std::memory_order_relaxed)) {
+            KickRecording(true);
+        }
+    }
 
     /// Whether a render pass with exactly this state is open.
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
@@ -928,6 +977,12 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    u64 pass_serial = 0;
+    using PrePass = std::vector<Common::UniqueFunction<void, vk::CommandBuffer>>;
+    /// The current pass's RecordBeforePass() list, while its chunks are held back.
+    PrePass* pre_pass = nullptr;
+    std::unique_ptr<RecordChunk> lane_chunk; ///< RecordHost() work while pre_pass is open
+    void QueueLane();
     RenderState ended_state{};
     void* ended_by{};
     void* ended_by_caller{};

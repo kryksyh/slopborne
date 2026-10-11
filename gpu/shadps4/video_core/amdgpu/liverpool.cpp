@@ -17,6 +17,7 @@
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
+#include "common/scope_exit.h"
 #include "common/thread.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -88,11 +89,13 @@ Liverpool::~Liverpool() {
 }
 
 void Liverpool::ProcessCommands() {
-    if (num_commands && rasterizer) {
-        rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands); // bbport: commands touch the caches
-    }
     // Process incoming commands with high priority
     while (num_commands) {
+        // bbport: commands touch the caches and may submit. Drained per command: one sent after
+        // a check outside the loop would run while the draw recording thread still records.
+        if (rasterizer) {
+            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands);
+        }
         Common::UniqueFunction<void> callback{};
         {
             std::scoped_lock lk{submit_mutex};
@@ -141,6 +144,9 @@ void Liverpool::Process(std::stop_token stoken) {
 
         while (num_submits || num_commands) {
             ProcessCommands();
+            if (rasterizer) {
+                rasterizer->KickDeferredSignals();
+            }
 
             curr_qid = (curr_qid + 1) % num_mapped_queues;
 
@@ -726,6 +732,59 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     // preparation) can only be compared with a snapshot from when processing began.
     static const char* fault_dir = std::getenv("BB_PM4_FAULT_DIR");
     const auto original_dcb = dcb;
+    // bbport: once a fence, label or flip of this buffer is published, the guest may recycle the
+    // buffer while its last packets are still to be parsed (seen: the next frame overwriting the
+    // final EVENT_WRITE_EOP while the recording thread published the one before it). The rest is
+    // parsed from a copy taken just before publishing, until a wait, after which the guest may
+    // patch the following commands.
+    std::vector<u32> detached;
+    size_t detached_offset = 0;
+    const auto guest_offset = [&] {
+        return static_cast<size_t>(dcb.data() -
+                                   (detached.empty() ? original_dcb.data() : detached.data()));
+    };
+    const auto forget = [&] {
+        std::erase_if(detached_commands, [&](const DetachedCommands& range) {
+            return range.copy == detached.data();
+        });
+    };
+    SCOPE_EXIT {
+        if (!detached.empty()) {
+            forget();
+        }
+    };
+    // The guest can recycle a buffer before it publishes any of its signals (told by an earlier
+    // submission's): top-level buffers are parsed from the copy made when it was submitted,
+    // except after a REWIND, which the guest uses to patch the commands that follow.
+    const auto submitted = draw_prep && !BbToggle::Disabled(BbToggle::SubmitCopyParse)
+                               ? draw_prep->CurrentCommands()
+                               : std::span<const u32>{};
+    bool from_submit = !submitted.empty() && submitted.size() == original_dcb.size();
+    const auto detach = [&] {
+        if (!detached.empty() || BbToggle::Disabled(BbToggle::DetachedTail)) {
+            return;
+        }
+        detached_offset = guest_offset();
+        const auto source = from_submit ? submitted : original_dcb;
+        detached.assign(source.begin(), source.end());
+        dcb = std::span<const u32>(detached).subspan(detached_offset);
+        detached_commands.push_back({reinterpret_cast<VAddr>(original_dcb.data()),
+                                     reinterpret_cast<VAddr>(original_dcb.data() +
+                                                             original_dcb.size()),
+                                     detached.data()});
+    };
+    const auto reattach = [&] {
+        if (detached.empty()) {
+            return;
+        }
+        const size_t offset = guest_offset();
+        dcb = original_dcb.subspan(offset);
+        forget();
+        detached.clear();
+    };
+    if (from_submit) {
+        detach();
+    }
     BbWriteLog::NoteIntent(reinterpret_cast<u64>(dcb.data()), &seq, sizeof(seq), BbWriteLog::DcbStart);
     std::span<const u32> submitted_commands;
     std::vector<u32> started_commands;
@@ -763,7 +822,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         std::error_code ec;
         std::filesystem::create_directories(directory.parent_path(), ec);
         if (!ec && std::filesystem::create_directory(directory, ec) && !ec) {
-            const size_t packet_offset = dcb.data() - original_dcb.data();
+            const size_t packet_offset = guest_offset();
             const std::vector<u32> current_commands(original_dcb.begin(), original_dcb.end());
             size_t different_words = 0;
             for (size_t i = 0; i < original_dcb.size(); ++i)
@@ -780,11 +839,13 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 "fault_reason={}\nobserved_header={:#x}\nsnapshot_phase={}\n"
                 "base={:#x}\nseq={}\npacket_offset_words={}\n"
                 "packet_words={}\nremaining_words={}\ndifferent_words={}\n"
-                "initial_header={:#x}\ncurrent_header={:#x}\ncomplete_binary_writes={}\n",
+                "initial_header={:#x}\ncurrent_header={:#x}\ncomplete_binary_writes={}\n"
+                "detached_from={}\n",
                 reason, observed_header, started_commands.empty() ? "submit" : "processing_start",
                 reinterpret_cast<uintptr_t>(original_dcb.data()), seq, packet_offset,
                 packet_words, dcb.size(), different_words, submitted_commands[packet_offset],
-                current_commands[packet_offset], initial_written && current_written);
+                current_commands[packet_offset], initial_written && current_written,
+                detached.empty() ? -1 : static_cast<long long>(detached_offset));
             std::printf("PM4 fault snapshot: %s (%zu words changed)\n",
                         directory.string().c_str(), different_words);
             bbgpu_dump_recent_small_writes(120);
@@ -844,6 +905,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     // bbport: after the writes before it (the buffer label: WriteData, which
                     // may still be queued on the draw recording thread).
                     if (rasterizer) {
+                        detach();
                         rasterizer->RunInOrder(&SignalFlip, header, sizeof(u32),
                                                BbToggle::PipelinedMemoryWrites);
                     } else {
@@ -1200,6 +1262,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::EventWriteEos: {
                 const auto packet = *reinterpret_cast<const PM4CmdEventWriteEos*>(header);
                 const auto* event_eos = &packet;
+                detach();
                 if (rasterizer &&
                     rasterizer->RunInOrder(&RunEventWriteEos, event_eos, sizeof(*event_eos))) {
                     NotePendingFences(*event_eos);
@@ -1209,6 +1272,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::EventWriteEop: {
                 const auto packet = *reinterpret_cast<const PM4CmdEventWriteEop*>(header);
                 const auto* event_eop = &packet;
+                detach();
                 if (rasterizer) {
                     if (rasterizer->RunInOrder(&RunEventWriteEop, event_eop, sizeof(*event_eop))) {
                         NotePendingFences(*event_eop);
@@ -1224,6 +1288,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (dma_data->dst_addr_lo == 0x3022C || !rasterizer) {
                     break;
                 }
+                detach();
                 if (rasterizer->RunInOrder(&RunDmaData, dma_data, sizeof(PM4DmaData),
                                            BbToggle::PipelinedMemoryWrites) &&
                     (dma_data->dst_sel == DmaDataDst::Memory ||
@@ -1243,6 +1308,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const u32 data_size = write_data->Size();
                 ASSERT(write_data->dst_sel.Value() == 2 || write_data->dst_sel.Value() == 5);
                 ASSERT(!write_data->wr_one_addr.Value());
+                detach();
                 if (rasterizer) {
                     // In order with the draws (on the draw recording thread when in use).
                     BbWriteLog::NoteIntent(write_data->Address<u64>(), write_data->data,
@@ -1289,14 +1355,35 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (!rasterizer) {
                     break;
                 }
-                const PM4CmdRewind* rewind = reinterpret_cast<const PM4CmdRewind*>(header);
+                reattach();
+                from_submit = false;
+                const PM4CmdRewind* rewind = reinterpret_cast<const PM4CmdRewind*>(dcb.data());
                 while (!rewind->Valid()) {
                     YIELD_GFX();
                 }
                 break;
             }
             case PM4ItOpcode::WaitRegMem: {
-                const auto* wait_reg_mem = reinterpret_cast<const PM4CmdWaitRegMem*>(header);
+                if (from_submit && !detached.empty()) {
+                    static const bool patch_stats = std::getenv("BB_PM4_PATCH_STATS") != nullptr;
+                    if (patch_stats) {
+                        // Would the guest's memory have parsed differently from here on?
+                        static u64 waits, differing;
+                        const size_t offset = guest_offset();
+                        ++waits;
+                        differing += !std::equal(dcb.begin(), dcb.end(),
+                                                 original_dcb.begin() + offset);
+                        if ((waits & 1023) == 0) {
+                            std::printf("PM4 waits parsed from the submit copy: %llu, guest "
+                                        "memory differing after them: %llu\n",
+                                        static_cast<unsigned long long>(waits),
+                                        static_cast<unsigned long long>(differing));
+                        }
+                    }
+                } else {
+                    reattach();
+                }
+                const auto* wait_reg_mem = reinterpret_cast<const PM4CmdWaitRegMem*>(dcb.data());
                 // ASSERT(wait_reg_mem->engine.Value() == PM4CmdWaitRegMem::Engine::Me);
                 // Optimization: VO label waits are special because the emulator
                 // will write to the label when presentation is finished. So if

@@ -69,8 +69,12 @@ enum : std::uint64_t {
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
+    BarriersBeforePass = 1ull << 56, ///< a draw's buffer barrier goes ahead of its render pass
     SkipNoOutputDraws = 1ull << 58, ///< draws without attachments, pixel shader or memory writes
     UploadPrologue = 1ull << 59, ///< buffer uploads during a render pass go before the submission
+    DetachedTail = 1ull << 60, ///< parse the rest of a command buffer from a copy once it signals
+    PrePassCopies = 1ull << 61, ///< copy shader copies during a render pass go before the pass
+    SubmitCopyParse = 1ull << 62, ///< top-level command buffers are parsed from the submit copy
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {
@@ -94,6 +98,12 @@ inline std::atomic<std::uint64_t> gpu_frames{0};
 inline std::atomic<std::uint64_t> t_resident{0}, t_protect{0}, t_image_create{0}, t_refresh{0},
     t_staging{0}, t_host_wait{0}, t_copy{0}, copy_bytes{0}, t_read_faults{0}, read_faults{0},
     t_write_faults{0}, t_copy_cpu{0}, copy_sys_us{0}, copy_minflt{0};
+/// Stall attribution between the GPU threads: draw recording thread busy, command thread waiting
+/// for it, resource binding, buffer synchronization, pipeline lookups (ns).
+inline std::atomic<std::uint64_t> t_stage_b{0}, t_drain{0}, t_bind{0}, t_buffer_sync{0},
+    t_pipeline{0}, t_bind_buffers{0}, t_bind_textures{0}, t_submit{0}, t_draw_record{0},
+    t_dispatch_record{0}, t_prepare_frame{0}, t_frames_ahead{0}, t_render_frame{0}, t_frame_flush{0},
+    t_frame_image{0};
 /// Diagnostics are collected only with BB_FRAME_STATS=1.
 inline const bool enabled = [] {
     const char* env = std::getenv("BB_FRAME_STATS");

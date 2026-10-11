@@ -423,7 +423,7 @@ void Runtime::CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
     if (needs_flush) {
         FlushBarriers();
     }
-    TouchBuffer(buffer, offset, copy_size);
+    TouchBuffer(buffer, offset, copy_size, true);
 
     const auto download_copy = buffer_copy;
     buffer_copy.imageSubresource.aspectMask = dst->aspect_mask & ~vk::ImageAspectFlagBits::eStencil;
@@ -785,10 +785,119 @@ void Runtime::SyncSubmission() {
     ++access_epoch;
 }
 
-void Runtime::TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size) {
+static const bool pass_stats = [] {
+    const char* env = std::getenv("BB_PASS_STATS");
+    return env && env[0] == '1';
+}();
+
+void Runtime::SyncPassRanges() {
+    if (scheduler.PassSerial() != pass_ranges_serial) {
+        pass_ranges_serial = scheduler.PassSerial();
+        pass_reads.clear();
+        pass_writes.clear();
+    }
+}
+
+void Runtime::TouchPass(u64 buffer, u64 start, u64 end, bool write) {
+    if (!write && !pass_watched.contains(buffer)) {
+        return;
+    }
+    draw_touches.push_back({buffer, start, end, write});
+}
+
+void Runtime::TouchPassRead(vk::Buffer buffer, u64 offset, u64 size) {
+    TouchPass(u64(static_cast<VkBuffer>(buffer)), offset,
+              size == VK_WHOLE_SIZE ? ~0ull : offset + size, false);
+}
+
+void Runtime::MarkDrawStart() {
+    SyncPassRanges();
+    for (const auto& touch : draw_touches) {
+        (touch.write ? pass_writes : pass_reads)[touch.buffer] +=
+            boost::icl::interval<u64>::right_open(touch.start, touch.end);
+    }
+    draw_touches.clear();
+}
+
+void Runtime::TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size, bool write) {
     SyncSubmission();
     submission_ranges[reinterpret_cast<u64>(handle)] +=
         boost::icl::interval<u64>::right_open(offset, offset + size);
+    TouchPass(u64(static_cast<VkBuffer>(handle->Handle())), offset, offset + size, write);
+}
+
+bool Runtime::CopyBufferBeforeRenderPass(const VideoCore::Buffer* src,
+                                         const VideoCore::Buffer* dst,
+                                         std::span<const vk::BufferCopy> copies,
+                                         bool src_tracked) {
+    if (BbToggle::Disabled(BbToggle::PrePassCopies)) {
+        return false;
+    }
+    SyncPassRanges();
+    const u64 src_key = u64(static_cast<VkBuffer>(src->Handle()));
+    const u64 dst_key = u64(static_cast<VkBuffer>(dst->Handle()));
+    // Reads of a buffer are noted once it is watched: a pass that began before cannot tell.
+    const auto [watch, added] = pass_watched.try_emplace(dst_key, scheduler.PassSerial());
+    if (added || watch->second >= scheduler.PassSerial()) {
+        return false;
+    }
+    const auto overlaps = [&](u64 key, bool is_src, bool reads) {
+        const auto in = [&](const auto& ranges) {
+            const auto it = ranges.find(key);
+            return it != ranges.end() &&
+                   std::ranges::any_of(copies, [&](const vk::BufferCopy& copy) {
+                       const u64 offset = is_src ? copy.srcOffset : copy.dstOffset;
+                       return boost::icl::intersects(
+                           it->second,
+                           boost::icl::interval<u64>::right_open(offset, offset + copy.size));
+                   });
+        };
+        if (in(pass_writes) || (reads && in(pass_reads))) {
+            return true;
+        }
+        return std::ranges::any_of(draw_touches, [&](const Touch& touch) {
+            return touch.buffer == key && (touch.write || reads) &&
+                   std::ranges::any_of(copies, [&](const vk::BufferCopy& copy) {
+                       const u64 offset = is_src ? copy.srcOffset : copy.dstOffset;
+                       return offset < touch.end && touch.start < offset + copy.size;
+                   });
+        });
+    };
+    if (overlaps(dst_key, false, true) || (src_tracked && overlaps(src_key, true, false))) {
+        return false;
+    }
+    const bool moved = scheduler.RecordBeforePass(
+        [src = src->Handle(), dst = dst->Handle(),
+         copies = std::vector<vk::BufferCopy>(copies.begin(), copies.end())](
+            vk::CommandBuffer cmdbuf) {
+            const vk::MemoryBarrier2 order = {
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .dstAccessMask =
+                    vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
+            };
+            cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &order});
+            cmdbuf.copyBuffer(src, dst, copies);
+        });
+    if (moved) {
+        // The submission prologue must not take later copies to these ranges ahead of it.
+        const auto note = [&](const VideoCore::Buffer* buffer, bool is_src) {
+            u64 start = ~0ull, end = 0;
+            for (const auto& copy : copies) {
+                const u64 offset = is_src ? copy.srcOffset : copy.dstOffset;
+                start = std::min(start, offset);
+                end = std::max(end, offset + copy.size);
+            }
+            submission_ranges[reinterpret_cast<u64>(buffer)] +=
+                boost::icl::interval<u64>::right_open(start, end);
+        };
+        note(dst, false);
+        if (src_tracked) {
+            note(src, true);
+        }
+    }
+    return moved;
 }
 
 bool Runtime::CopyBufferBeforePass(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
@@ -797,9 +906,6 @@ bool Runtime::CopyBufferBeforePass(const VideoCore::Buffer* src, const VideoCore
         return false;
     }
     SyncSubmission();
-    if (submission_untracked) {
-        return false;
-    }
     const auto touched = [&](const VideoCore::Buffer* buffer, bool is_src) {
         const auto it = submission_ranges.find(reinterpret_cast<u64>(buffer));
         if (it == submission_ranges.end()) {
@@ -811,8 +917,19 @@ bool Runtime::CopyBufferBeforePass(const VideoCore::Buffer* src, const VideoCore
                 it->second, boost::icl::interval<u64>::right_open(offset, offset + copy.size));
         });
     };
-    if (touched(dst, false) || (src_tracked && touched(src, true))) {
-        return false;
+    if (submission_untracked || touched(dst, false) || (src_tracked && touched(src, true))) {
+        const bool moved = CopyBufferBeforeRenderPass(src, dst, copies, src_tracked);
+        if (pass_stats) {
+            static u64 before_pass, in_pass;
+            ++(moved ? before_pass : in_pass);
+            if (((before_pass + in_pass) & 4095) == 0) {
+                std::printf("Copies during a render pass: %llu moved before it, %llu not\n",
+                            static_cast<unsigned long long>(before_pass),
+                            static_cast<unsigned long long>(in_pass));
+                std::fflush(stdout);
+            }
+        }
+        return moved;
     }
     // Commands of this submission do not touch these ranges before here; earlier prologue
     // copies may (an upload of the source), hence the barrier between prologue copies.
@@ -853,6 +970,9 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
         vk::AccessFlagBits2::eDepthStencilAttachmentWrite | vk::AccessFlagBits2::eTransferWrite |
         vk::AccessFlagBits2::eMemoryWrite | vk::AccessFlagBits2::eTransformFeedbackWriteEXT;
 
+    TouchPass(u64(static_cast<VkBuffer>(handle->Handle())), range.range_start,
+              range.range_end + 1, bool(src_access & WRITE_MASK));
+
     // bbport: reads are tracked at 4 KiB granularity. Constant data comes from ring allocations
     // at a new offset every draw; rounded, they land in ranges already present and the
     // insert returns early instead of growing the tree until the next barrier flush.
@@ -891,6 +1011,31 @@ void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size
 
     memory_barrier.srcStageMask |= src_stage;
     memory_barrier.srcAccessMask |= src_access & WRITE_MASK;
+}
+
+bool Runtime::FlushBarriersBeforePass() {
+    if (!scheduler.IsRendering() || BbToggle::Disabled(BbToggle::PrePassCopies) ||
+        BbToggle::Disabled(BbToggle::BarriersBeforePass)) {
+        return false;
+    }
+    BeforeImageAccess();
+    if (!image_barriers.empty() || !memory_barrier.srcStageMask) {
+        return false;
+    }
+    // Writes the barrier covers then all precede the pass, and so the barrier ahead of it.
+    SyncPassRanges();
+    if (!pass_writes.empty() ||
+        std::ranges::any_of(draw_touches, [](const Touch& touch) { return touch.write; })) {
+        return false;
+    }
+    if (!scheduler.RecordBeforePass([](vk::CommandBuffer) {})) {
+        return false;
+    }
+    memory_barrier.srcStageMask = vk::PipelineStageFlagBits2::eNone;
+    memory_barrier.srcAccessMask = vk::AccessFlagBits2::eNone;
+    barrier_tracker.Clear();
+    ++access_epoch;
+    return true;
 }
 
 void Runtime::FlushBarriers() {

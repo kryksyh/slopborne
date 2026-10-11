@@ -106,6 +106,11 @@ public:
     bool RedirectColor(VideoCore::ImageId color, const VideoCore::ImageViewInfo& view,
                        Target& target);
     bool RedirectDepth(VideoCore::ImageId depth, Target& target);
+    /// A UI pass whose depth was redirected but not its color: the UI draws elsewhere, and its
+    /// stencil masks must stay in the depth image those draws test.
+    void OnDepthWithoutColor() {
+        ui_depth_kept = true;
+    }
     /// A sampled image replaced by the upscaled frame (the display pass).
     bool RedirectSampled(VideoCore::ImageId image, const VideoCore::ImageViewInfo& info,
                          vk::ImageView& view, vk::ImageLayout& layout);
@@ -217,6 +222,7 @@ private:
     VideoCore::ImageId ui_color{}, ui_depth{};
     bool ui_phase = false;         ///< from the upscale to the next display pass
     bool display_redirect = false; ///< the display pass of an upscaled frame
+    bool ui_depth_kept = false;    ///< UI depth stays in the guest image (OnDepthWithoutColor)
     bool ui_read_barrier = false;
     VideoCore::UniqueImage ui_image;
     VideoCore::UniqueImage ui_depth_image;

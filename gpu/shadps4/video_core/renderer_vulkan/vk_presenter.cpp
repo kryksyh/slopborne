@@ -355,6 +355,7 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
+    BbStats::Timer stall_timer{BbStats::t_prepare_frame};
     // bbport: BB_FRAME_DUMP_TRIGGER=<file>: when the file exists it is removed and this frame's
     // guest display buffer and presented image are written to BB_DUMP_DIR (default out/dump)
     // as raw 32-bit pixels (menus and movies included; the upscaler dumps scene frames only).
@@ -386,6 +387,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                             sequence_capture ||
                             (frame_dump_trigger && std::remove(frame_dump_trigger) == 0);
     // bbport: scaled upscaler presets: the output-size display buffer drawn by the port.
+    std::optional<BbStats::Timer> image_timer{std::in_place, BbStats::t_frame_image};
     TemporalUpscaler::Display display{};
     const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(
         cpu_address, GetFrameViewFormat(attribute.attrib.pixel_format), display);
@@ -395,6 +397,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         image_id = texture_cache.FindImage(desc);
         texture_cache.UpdateImage(image_id);
     }
+    image_timer.reset();
 
     Frame* frame = GetRenderFrame();
 
@@ -538,7 +541,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
     SubmitInfo info{};
-    draw_scheduler.Flush(info);
+    {
+        BbStats::Timer flush_timer{BbStats::t_frame_flush};
+        draw_scheduler.Flush(info);
+    }
 
     // bbport: the GPU command thread runs at most BB_FRAMES_AHEAD (default 1) guest frames
     // ahead of the GPU: it waits here for the frame that many flips back. When the GPU is the
@@ -555,6 +561,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             const u64 tick = recent_frame_ticks.front();
             recent_frame_ticks.pop_front();
             if (recent_frame_ticks.size() == frames_ahead) {
+                BbStats::Timer wait_timer{BbStats::t_frames_ahead};
                 draw_scheduler.Wait(tick);
             }
         }
@@ -817,6 +824,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 }
 
 Frame* Presenter::GetRenderFrame() {
+    BbStats::Timer stall_timer{BbStats::t_render_frame};
     // Wait for free presentation frames
     Frame* frame;
     {

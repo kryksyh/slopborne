@@ -126,6 +126,13 @@ public:
     void WaitDeferredSignals() {
         scheduler.WaitDeferredSignals();
     }
+    /// Stage A, while queues wait: fences a held render pass keeps back go out once the draw
+    /// recording thread is idle (a queue may be waiting for one).
+    void KickDeferredSignals() {
+        if (DrawPipeIdle()) {
+            scheduler.KickDeferredSignals();
+        }
+    }
     /// Runs `signal` after the guest memory copies issued so far, without waiting here.
     void SignalAfterHostCopies(std::function<void()> signal) {
         scheduler.SignalAfterHostCopies(std::move(signal));
@@ -356,6 +363,8 @@ private:
     Common::SharedFirstMutex mapped_ranges_mutex;
     PipelineCache pipeline_cache;
     std::unique_ptr<DrawPreparation> draw_prep;
+    static constexpr u64 ZeroVertexBufferSize = 64 * 1024;
+    std::unique_ptr<VideoCore::Buffer> zero_vertex_buffer; ///< bound for absent vertex buffers
     std::unique_ptr<CameraMotion> camera_motion; // bbport: motion vectors (docs/upscaler.md)
     std::unique_ptr<SceneTargets> scene_targets;
     bool scene_started = false;

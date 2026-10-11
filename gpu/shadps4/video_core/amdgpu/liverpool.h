@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include <condition_variable>
+#include <cstring>
 #include <deque>
 #include <coroutine>
 #include <exception>
@@ -34,6 +35,27 @@ struct VideoOutPort;
 namespace AmdGpu {
 
 union PM4Header;
+
+/// bbport: guest ranges of command buffers now parsed from a copy (Liverpool::ProcessGraphics).
+/// The guest may already be rewriting them, also data embedded in the commands that draws read
+/// (constants): readers on the command processor thread take those bytes from the copy.
+struct DetachedCommands {
+    VAddr begin, end;
+    const u32* copy;
+};
+inline std::vector<DetachedCommands> detached_commands;
+
+inline void OverlayDetached(VAddr address, u8* dst, u64 size) {
+    for (const auto& range : detached_commands) {
+        const VAddr begin = std::max(address, range.begin);
+        const VAddr end = std::min<VAddr>(address + size, range.end);
+        if (begin < end) {
+            std::memcpy(dst + (begin - address),
+                        reinterpret_cast<const u8*>(range.copy) + (begin - range.begin),
+                        end - begin);
+        }
+    }
+}
 
 struct Liverpool {
     static constexpr u32 GfxQueueId = 0u;

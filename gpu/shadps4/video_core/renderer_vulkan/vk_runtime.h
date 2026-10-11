@@ -99,8 +99,18 @@ public:
 
     void FlushBarriers();
 
+    /// bbport: the pending memory barrier as part of the barriers ahead of the current render
+    /// pass (no split) when the pass itself wrote nothing; false when it does not apply.
+    bool FlushBarriersBeforePass();
+
     /// bbport: notes a buffer range read or written by commands of the current submission.
-    void TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size);
+    void TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size, bool write = false);
+
+    /// bbport: a vertex buffer range read by the current draw.
+    void TouchPassRead(vk::Buffer buffer, u64 offset, u64 size);
+
+    /// bbport: a draw begins noting its accesses (see draw_touches).
+    void MarkDrawStart();
 
     /// bbport: commands of this submission access buffers TouchBuffer cannot name.
     void TouchUntracked() {
@@ -152,6 +162,21 @@ private:
     std::unordered_map<u64, boost::icl::interval_set<u64>> submission_ranges;
     u64 submission_tick = ~0ull;
     bool submission_untracked = false;
+    // Exact ranges read (of watched buffers) and written since the current render pass began,
+    // by VkBuffer: may a copy go before the pass? The current draw's accesses are noted before
+    // its pass begins, so they wait in draw_touches until the next draw starts.
+    struct Touch {
+        u64 buffer, start, end;
+        bool write;
+    };
+    std::unordered_map<u64, boost::icl::interval_set<u64>> pass_reads, pass_writes;
+    std::vector<Touch> draw_touches;
+    std::unordered_map<u64, u64> pass_watched; ///< VkBuffer -> pass serial it was added in
+    u64 pass_ranges_serial = ~0ull;
+    void SyncPassRanges();
+    void TouchPass(u64 buffer, u64 start, u64 end, bool write);
+    bool CopyBufferBeforeRenderPass(const VideoCore::Buffer* src, const VideoCore::Buffer* dst,
+                                    std::span<const vk::BufferCopy> copies, bool src_tracked);
     void SyncSubmission();
 };
 

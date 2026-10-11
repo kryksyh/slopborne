@@ -312,6 +312,8 @@ void VideoOutDriver::Flip(const Request& req) {
         intervals.push_back(frame_ms);
         last = now;
         // Stall diagnostics: what happened during a long frame.
+        // (macOS has no thread CPU clock for the GPU thread: its time reads 0.)
+        static bool frames_seen;
         static u64 last_gpu_ns, last_images, last_image_bytes, last_buffer_bytes;
         static u64 last_t[6], last_minflt, last_sigf, last_pc, last_pp, last_rc, last_rp;
         const u64 pc = BbStats::protect_calls.load(), pp = BbStats::protect_pages.load(),
@@ -323,7 +325,56 @@ void VideoOutDriver::Flip(const Request& req) {
         static u64 last_proc_flt, last_copy_ns, last_copy_bytes, last_rf, last_trf, last_twf;
         const u64 rf = BbStats::read_faults.load(), trf = BbStats::t_read_faults.load(),
                   twf = BbStats::t_write_faults.load();
-        if (frame_ms > 40.0 && last_gpu_ns != 0) {
+        // GPU command thread idle: waiting for the guest to submit (the game itself stalled).
+        static u64 last_idle;
+        const u64 idle_now = BbStats::gpu_idle_ns.load();
+        const u64 idle_delta = idle_now >= last_idle ? idle_now - last_idle : idle_now;
+        last_idle = idle_now;
+        // Waits of the GPU threads (the window statistics reset these counters: deltas restart).
+        static u64 last_waits[4];
+        const u64 waits_now[4] = {BbStats::tick_wait_ns.load(), BbStats::sync_recording_ns.load(),
+                                  BbStats::host_copies_wait_ns.load(),
+                                  BbStats::copy_threads_wait_ns.load()};
+        u64 wait_delta[4];
+        for (int i = 0; i < 4; ++i) {
+            wait_delta[i] = waits_now[i] >= last_waits[i] ? waits_now[i] - last_waits[i] : waits_now[i];
+            last_waits[i] = waits_now[i];
+        }
+        static u64 last_split[15];
+        const u64 split_now[15] = {BbStats::t_stage_b.load(), BbStats::t_drain.load(),
+                                  BbStats::t_bind.load(), BbStats::t_buffer_sync.load(),
+                                  BbStats::t_pipeline.load(), BbStats::t_bind_buffers.load(),
+                                  BbStats::t_bind_textures.load(), BbStats::t_submit.load(),
+                                  BbStats::t_draw_record.load(), BbStats::t_dispatch_record.load(),
+                                  BbStats::t_prepare_frame.load(), BbStats::t_frames_ahead.load(),
+                                  BbStats::t_render_frame.load(), BbStats::t_frame_flush.load(),
+                                  BbStats::t_frame_image.load()};
+        if (frame_ms > 40.0 && frames_seen) {
+            std::printf("       draw recording thread busy %.1f ms (binding %.1f: buffers %.1f, "
+                        "textures %.1f; buffer sync %.1f); command thread waited for it %.1f ms, "
+                        "pipeline lookups %.1f ms; submissions %.1f, draw records %.1f, dispatch "
+                        "records %.1f ms; frame preparation %.1f (frames-ahead wait %.1f, free frame "
+                        "wait %.1f, flush %.1f, display image %.1f) ms\n",
+                        (split_now[0] - last_split[0]) / 1e6, (split_now[2] - last_split[2]) / 1e6,
+                        (split_now[5] - last_split[5]) / 1e6, (split_now[6] - last_split[6]) / 1e6,
+                        (split_now[3] - last_split[3]) / 1e6, (split_now[1] - last_split[1]) / 1e6,
+                        (split_now[4] - last_split[4]) / 1e6, (split_now[7] - last_split[7]) / 1e6,
+                        (split_now[8] - last_split[8]) / 1e6, (split_now[9] - last_split[9]) / 1e6,
+                        (split_now[10] - last_split[10]) / 1e6, (split_now[11] - last_split[11]) / 1e6,
+                        (split_now[12] - last_split[12]) / 1e6, (split_now[13] - last_split[13]) / 1e6,
+                        (split_now[14] - last_split[14]) / 1e6);
+        }
+        for (int i = 0; i < 15; ++i) {
+            last_split[i] = split_now[i];
+        }
+        if (frame_ms > 40.0 && frames_seen) {
+            std::printf("       GPU command thread idle (waiting for guest submissions) %.1f ms; "
+                        "waiting for the GPU %.1f ms, recording %.1f ms, host copies %.1f ms, "
+                        "copy threads %.1f ms\n",
+                        idle_delta / 1e6, wait_delta[0] / 1e6, wait_delta[1] / 1e6,
+                        wait_delta[2] / 1e6, wait_delta[3] / 1e6);
+        }
+        if (frame_ms > 40.0 && frames_seen) {
             std::printf("       fault handlers: %llu read faults %.1f ms, write faults %.1f ms\n",
                         static_cast<unsigned long long>(rf - last_rf), (trf - last_trf) / 1e6,
                         (twf - last_twf) / 1e6);
@@ -355,7 +406,7 @@ void VideoOutDriver::Flip(const Request& req) {
         const u64 images = BbStats::images_registered.load();
         const u64 image_bytes = BbStats::image_upload_bytes.load();
         const u64 buffer_bytes = BbStats::buffer_upload_bytes.load();
-        if (frame_ms > 40.0 && last_gpu_ns != 0) {
+        if (frame_ms > 40.0 && frames_seen) {
             std::printf("Stall: %.1f ms frame; GPU thread on CPU %.1f ms; %llu images registered, "
                         "%.1f MB image uploads, %.1f MB buffer uploads\n",
                         frame_ms, (gpu_ns - last_gpu_ns) / 1e6,
@@ -370,7 +421,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         (sys_us - last_sys) / 1e3, static_cast<unsigned long long>(invol - last_invol),
                         static_cast<unsigned long long>(vol - last_vol));
         }
-        if (frame_ms > 40.0 && last_gpu_ns != 0) {
+        if (frame_ms > 40.0 && frames_seen) {
             std::printf("       ms in: resident %.1f, protect %.1f, image create %.1f, "
                         "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
                         (t_now[0] - last_t[0]) / 1e6, (t_now[1] - last_t[1]) / 1e6,
@@ -391,7 +442,7 @@ void VideoOutDriver::Flip(const Request& req) {
         last_rc = rc;
         last_rp = rp;
         last_minflt = minflt;
-        if (frame_ms > 40.0 && last_gpu_ns != 0 && copy_ns > last_copy_ns) {
+        if (frame_ms > 40.0 && frames_seen && copy_ns > last_copy_ns) {
             std::printf("       guest copies %.1f MB in %.1f thread-ms, %.1f ms on CPU (kernel %.1f ms, "
                         "%llu page faults in large copies) (%.2f GB/s per thread)\n",
                         (copy_bytes - last_copy_bytes) / 1e6, (copy_ns - last_copy_ns) / 1e6,
@@ -415,6 +466,7 @@ void VideoOutDriver::Flip(const Request& req) {
         last_invol = invol;
         last_vol = vol;
         last_gpu_ns = gpu_ns;
+        frames_seen = true;
         last_images = images;
         last_image_bytes = image_bytes;
         last_buffer_bytes = buffer_bytes;
@@ -446,7 +498,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         compile_ns / 1e6, static_cast<unsigned long long>(direct),
                         faults / window, static_cast<long long>(BbStats::hot_pages.load()),
                         us_per_draw, draws_per_frame,
-                        BbStats::gpu_idle_ns.exchange(0) / (window * 1e7),
+                        (last_idle = 0, BbStats::gpu_idle_ns.exchange(0)) / (window * 1e7),
                         BbStats::sync_recording_ns.exchange(0) / (window * 1e7),
                         BbStats::host_copies_wait_ns.exchange(0) / (window * 1e7),
                         frames ? double(BbStats::host_copy_waits.exchange(0)) / frames : 0.0,

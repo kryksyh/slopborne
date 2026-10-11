@@ -206,7 +206,10 @@ static void read_inject(void) {
  * the time since F9; BB_PAD_REPLAY=<file> plays such a recording back, started by the token
  * "replay" in BB_PAD_FILE (scripted tests repeat a route the player ran once). Lines: ms buttons
  * lx ly rx ry l2 r2, written when the state changes. */
-typedef struct { uint32_t ms, buttons; uint8_t axes[4], l2, r2; } PadSample;
+typedef struct { uint32_t ms, buttons; uint8_t axes[4], l2, r2; uint64_t read; } PadSample;
+/* Pad reads so far: the game reads once or a fixed number of times per game frame, so replaying
+ * by read index (not time) gives every game frame the recorded input. */
+static uint64_t pad_reads, record_start_read;
 static FILE *record_file;
 static uint64_t record_start;
 static PadSample record_last;
@@ -222,22 +225,39 @@ static void record_sample(const PadData *d) {
             printf("Runtime: pad recording stopped (%s)\n",path);
         } else if ((record_file=fopen(path,"w"))) {
             record_start=now_us();
+            record_start_read=pad_reads;
             memset(&record_last,0xff,sizeof(record_last));
             printf("Runtime: pad recording started (%s, F9 stops)\n",path);
         }
     }
     f9_was_down=f9;
+    /* BB_PAD_RECORD_AUTO=1: the first input moving away from rest starts the recording (keys
+     * like F9 may be media keys); it runs until exit. */
+    static int auto_checked, auto_start;
+    if (!auto_checked) { const char *a=getenv("BB_PAD_RECORD_AUTO"); auto_start=a && *a=='1'; auto_checked=1; }
+    if (auto_start==1 && !record_file) {
+        int moved=d->buttons || d->l2>30 || d->r2>30;
+        const uint8_t axes[4]={d->left_x,d->left_y,d->right_x,d->right_y};
+        for (int i=0;i<4;++i) moved|=axes[i]<96 || axes[i]>160;
+        if (moved && (record_file=fopen(path,"w"))) {
+            auto_start=2;
+            record_start=now_us();
+            memset(&record_last,0xff,sizeof(record_last));
+            printf("Runtime: pad recording started on input (%s)\n",path);
+        }
+    }
     if (!record_file) return;
     PadSample s={(uint32_t)((now_us()-record_start)/1000),d->buttons,
-                 {d->left_x,d->left_y,d->right_x,d->right_y},d->l2,d->r2};
+                 {d->left_x,d->left_y,d->right_x,d->right_y},d->l2,d->r2,pad_reads-record_start_read};
     if (s.buttons==record_last.buttons && !memcmp(s.axes,record_last.axes,4) &&
         s.l2==record_last.l2 && s.r2==record_last.r2) return;
     record_last=s;
-    fprintf(record_file,"%u %u %u %u %u %u %u %u\n",s.ms,s.buttons,s.axes[0],s.axes[1],s.axes[2],
-            s.axes[3],s.l2,s.r2);
+    fprintf(record_file,"%u %u %u %u %u %u %u %u %llu\n",s.ms,s.buttons,s.axes[0],s.axes[1],s.axes[2],
+            s.axes[3],s.l2,s.r2,(unsigned long long)s.read);
     fflush(record_file);
 }
 static PadSample *replay; static size_t replay_count, replay_next;
+static int replay_by_read; static uint64_t replay_start_read;
 static void replay_sample(PadData *d) {
     if (!replay_armed) return;
     if (!replay_start) {
@@ -246,22 +266,34 @@ static void replay_sample(PadData *d) {
             loaded=1;
             const char *path=getenv("BB_PAD_REPLAY");
             FILE *f=path ? fopen(path,"r") : NULL;
-            PadSample s; unsigned v[8]; size_t cap=0;
-            while (f && fscanf(f,"%u %u %u %u %u %u %u %u",&v[0],&v[1],&v[2],&v[3],&v[4],&v[5],&v[6],&v[7])==8) {
-                s=(PadSample){v[0],v[1],{(uint8_t)v[2],(uint8_t)v[3],(uint8_t)v[4],(uint8_t)v[5]},(uint8_t)v[6],(uint8_t)v[7]};
+            /* Recordings without read indices: BB_PAD_REPLAY_READS_PER_SEC converts their times. */
+            const char *rate_env=getenv("BB_PAD_REPLAY_READS_PER_SEC");
+            const double rate=rate_env ? atof(rate_env) : 0.0;
+            PadSample s; unsigned v[8]; unsigned long long read; size_t cap=0;
+            char line[256];
+            while (f && fgets(line,sizeof(line),f)) {
+                const int n=sscanf(line,"%u %u %u %u %u %u %u %u %llu",&v[0],&v[1],&v[2],&v[3],&v[4],&v[5],&v[6],&v[7],&read);
+                if (n<8) continue;
+                if (n<9) read=rate>0 ? (unsigned long long)(v[0]*rate/1000.0+0.5) : 0;
+                s=(PadSample){v[0],v[1],{(uint8_t)v[2],(uint8_t)v[3],(uint8_t)v[4],(uint8_t)v[5]},(uint8_t)v[6],(uint8_t)v[7],read};
                 if (replay_count==cap && !(replay=realloc(replay,(cap=cap ? cap*2 : 1024)*sizeof(*replay)))) break;
                 replay[replay_count++]=s;
             }
+            replay_by_read=replay_count && (replay[replay_count-1].read>0);
             if (f) fclose(f);
             printf("Runtime: pad replay of %zu samples from %s\n",replay_count,path ? path : "(unset)");
         }
         replay_start=now_us();
+        replay_start_read=pad_reads;
         replay_next=0;
     }
     const uint32_t ms=(uint32_t)((now_us()-replay_start)/1000);
-    while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
+    const uint64_t read=pad_reads-replay_start_read;
+    while (replay_next<replay_count &&
+           (replay_by_read ? replay[replay_next].read<=read : replay[replay_next].ms<=ms)) ++replay_next;
     if (!replay_next) return;
-    if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
+    if (replay_next==replay_count && ms>replay[replay_count-1].ms+500 &&
+        (!replay_by_read || read>replay[replay_count-1].read+15)) {
         if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
         return;
     }
@@ -274,6 +306,14 @@ static void replay_sample(PadData *d) {
  * name) stay hidden until released: the game would take them as a new press. */
 static int hold_after_capture;
 static void sample(PadData *d) {
+    ++pad_reads;
+    static uint64_t rate_start, rate_reads;
+    const uint64_t t=now_us();
+    if (!rate_start) rate_start=t;
+    else if (t-rate_start>=10000000) {
+        printf("Runtime: pad reads %.1f/s\n",(pad_reads-rate_reads)*1e6/(double)(t-rate_start));
+        rate_start=t; rate_reads=pad_reads;
+    }
     sample_host(d);
     if (bbgpu_overlay_captures_input()) { hold_after_capture=1; return; }
     record_sample(d);
