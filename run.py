@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Windows counterpart of run.sh: prepares the game image and starts bb-probe.exe.
+"""Windows and macOS app counterpart of run.sh: prepares the game image and starts bb-probe.
 
 Same environment variables as run.sh (BB_GAME_DIR, BB_DATA_DIR, BB_FPS, BB_RENDER_RES,
 BB_LIVE_RES, BB_PATCHES, BB_MODS_*, BB_USER_DIR, ...). Extra arguments go to bb-probe.
@@ -12,11 +12,14 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 PORT = Path(__file__).resolve().parent
+EXE = '.exe' if sys.platform == 'win32' else ''
 
 
 # Co-op: the community service that answers Bloodborne's own game-server requests
@@ -74,6 +77,14 @@ def fail(message):
 
 
 def wait_for(pid):
+    if sys.platform != 'win32':
+        for _ in range(300):
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return
+            time.sleep(0.1)
+        return
     kernel32 = ctypes.windll.kernel32
     SYNCHRONIZE = 0x00100000
     handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
@@ -84,6 +95,8 @@ def wait_for(pid):
 
 def no_console():
     """Started without a console (the launcher): console programs must not open their own."""
+    if sys.platform != 'win32':
+        return 0
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
@@ -124,6 +137,30 @@ def find_executable(name):
     return None
 
 
+def install_pipeline_list(game, gpu_user_dir, out, env):
+    """Pipelines the port ships (pipelines/: descriptions and fetch shaders, no SPIR-V) go into the
+    game's pipeline cache, where nothing is overwritten; the game builds their shaders at start from
+    the game's own shader programs, found here once (scripts/game_shaders.py)."""
+    shipped = PORT / 'pipelines'
+    if not shipped.is_dir():
+        return
+    programs = out / 'shader_programs'
+    stamp = programs / 'source.txt'
+    source = f'{(game / "eboot.bin").stat().st_mtime_ns} {len(list((game / "dvdroot_ps4/shader").glob("*.dcx")))}'
+    if not stamp.is_file() or stamp.read_text() != source:
+        run_script('game_shaders.py', game, '--out', programs)
+        stamp.write_text(source)
+    env['BB_SHADER_PROGRAMS_DIR'] = str(programs)
+    sys.path.insert(0, str(PORT / 'scripts'))
+    from prepare import sfo
+    title = sfo((game / 'sce_sys/param.sfo').read_bytes()).get('TITLE_ID', 'CUSA03173')
+    cache = gpu_user_dir / 'cache' / title
+    cache.mkdir(parents=True, exist_ok=True)
+    for file in shipped.iterdir():
+        if file.suffix in ('.meta', '.key', '.fetch') and not (cache / file.name).exists():
+            shutil.copy2(file, cache / file.name)
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -140,9 +177,9 @@ def main():
     if not env.get('BB_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['BB_FSR411_DIR'] = str(data / 'fsr4_411')
 
-    probe = Path(env['BB_PROBE']) if env.get('BB_PROBE') else find_executable('bb-probe.exe')
+    probe = Path(env['BB_PROBE']) if env.get('BB_PROBE') else find_executable('bb-probe' + EXE)
     if not probe or not probe.is_file():
-        fail('bb-probe.exe not found: build it with build.sh (MSYS2 CLANG64) or use a packaged build.')
+        fail(f'bb-probe{EXE} not found: build it with build.sh (MSYS2 CLANG64) or use a packaged build.')
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
     if not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
@@ -186,7 +223,7 @@ def main():
         if scaled_output:
             live = env.get('BB_LIVE_RES') or ini_value(config, 'live_resolution') or '0'
             if live == 'auto':
-                caps = probe.parent / 'bb-gpu-capabilities.exe'
+                caps = probe.parent / ('bb-gpu-capabilities' + EXE)
                 result = subprocess.run([str(caps), '--live-resolution'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                         text=True, creationflags=no_console())
                 live = result.stdout.strip() if result.returncode == 0 else '0'
@@ -211,11 +248,13 @@ def main():
         user_dir = Path(env.get('BB_USER_DIR', data / 'user')).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('BB_GPU_USER_DIR', str(user_dir))
+        install_pipeline_list(game, Path(env['BB_GPU_USER_DIR']), out, env)
         if env.get('BB_ONLINE') == '1':
             online_overrides(env, user_dir)
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
         restart = [sys.executable, *this, '--after', str(os.getpid()), *args]
-        env['BB_RESTART_COMMAND'] = subprocess.list2cmdline(restart)
+        env['BB_RESTART_COMMAND'] = (subprocess.list2cmdline(restart) if sys.platform == 'win32'
+                                     else shlex.join(restart))
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--patches', str(out / 'patches.bin'), '--app0', str(game),
                    '--user', str(user_dir),

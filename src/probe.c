@@ -405,6 +405,23 @@ void runtime_restart(void) {
     /* The new launch waits for this process's GPU device to go away (run.py --after). */
     TerminateProcess(GetCurrentProcess(),0);
 #else
+    /* The macOS app (run.py) sets BB_RESTART_COMMAND: a new launch that waits for this one to
+     * end (--after), started detached; this process then exits. Same output: the log continues. */
+    const char *command=getenv("BB_RESTART_COMMAND");
+    if (command && *command) {
+        puts("Runtime: restarting through BB_RESTART_COMMAND");
+        fflush(NULL);
+        pid_t child=fork();
+        if (child==0) {
+            int maxfd=getdtablesize();
+            for (int fd=3;fd<maxfd;++fd) close(fd);
+            setsid();
+            execl("/bin/sh","sh","-c",command,(char *)NULL);
+            _exit(127);
+        }
+        if (child<0) { perror("runtime_restart: fork"); _exit(1); }
+        _exit(0);
+    }
     puts("Runtime: restarting through run.sh");
 #ifdef __APPLE__
     int maxfd=getdtablesize();

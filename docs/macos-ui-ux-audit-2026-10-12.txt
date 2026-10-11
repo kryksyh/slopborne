@@ -1,0 +1,233 @@
+Bloodborne macOS: UI/UX and quality-of-life investigation
+Reviewed 2026-10-12. Scope: current main checkout plus official project documentation.
+
+Recommendation
+
+Build a small, persistent Mac launcher around the existing runtime and preparation
+pipeline, with the same settings model exposed in a controller-friendly overlay.
+The first release should make setup, launch progress, input configuration, save
+recovery, and diagnostics understandable. Preserve the original rendering defaults.
+Settings labels must describe a target, not promise that every scene reaches it.
+
+This is a source/documentation audit, not a usability playtest. No benchmark or
+other agent's game session was interrupted. Proposed features below are not
+implemented unless explicitly marked. External projects are design references,
+not evidence that their runtime features can be transplanted into this port.
+
+Current implementation and concrete gaps
+
+1. Mac startup is a sequence of AppleScript dialogs followed by a blocking child
+   process, not a persistent launcher window. It remembers the game directory,
+   checks Rosetta, warns about free memory, and redirects launch output to a log.
+   There is no visible preparation/shader progress or persistent recovery screen.
+   See packaging/macos/app/bloodborne_mac.py: main(), find_game(), play().
+
+2. The overlay already supports mouse, keyboard and gamepad navigation, automatic
+   scaling, EN/RU text, live changes, restart-needed settings, and an FPS counter.
+   It is one long window. Temporal reconstruction parameters and debug views
+   precede basic output settings; effects, cheats and camera tweaks share a list.
+   Unsupported GPU choices are disabled, but still take space, as does a planned
+   XeSS entry. There is no setting search, category navigation or reset UI.
+   See gpu/shim/bbport_overlay.cpp: Menu(), SetOpen(), CapturesInput().
+
+3. Opening settings neutralizes player input but does not suspend game execution.
+   The player can remain exposed to enemies while using the menu. Do not call it
+   a pause menu or imply pause until a coordinated runtime pause is implemented.
+   Until then show "Game is still running" and support configuration before play.
+
+4. SDL gamepads reconnect automatically; standard buttons, analog input,
+   touchpad input and rumble are present. Selection uses the first SDL gamepad.
+   Most keyboard gameplay input is ignored while a gamepad is connected (touchpad
+   keyboard shortcuts are exceptions). Bindings and trigger thresholds are fixed;
+   there is no port-level control editor or stick calibration screen. Keyboard
+   camera input uses arrows. Name entry needs a keyboard for arbitrary text.
+   See src/runtime_pad.c and gpu/shim/window.cpp. Preserve any camera settings
+   already offered by Bloodborne itself rather than duplicating them blindly.
+
+5. Save-folder import and changed-save backups already exist. There is no backup
+   browser, export/restore workflow or import preview. backup_saves() originally
+   deleted snapshots beyond 20; that pruning was removed during this audit.
+   Existing snapshot detection uses file size and second-resolution modification
+   times, and snapshot directory names also have second resolution. Follow-up:
+   content verification and collision-safe naming, with tests for rapid imports.
+   Restore/import must be disabled during play and preserve the previous save.
+
+6. Crash ZIP export exists after an abnormal exit. It includes system data, two
+   logs and bbport.ini. It is not a hang detector or a graphics-artifact reporting
+   workflow. Logs currently rotate by overwriting older log names. Follow-up:
+   retain per-session logs, add build/game/patch manifests, and preview exports.
+
+7. packaging/macos/package.sh unconditionally copies
+   packaging/macos/app/bbport.ini, but that source file is absent in this checkout
+   and is not tracked. This is a packaging blocker identified by inspection;
+   a full package build was not run during this investigation. The developer
+   README also contains stale status paragraphs. Package claims need a fresh
+   packaged-app smoke test, independently of development executable tests.
+
+8. Important groundwork exists in our own Windows/Linux launchers: categorized
+   configuration, game/save paths, mods and patches, game-version checks, launch
+   status and Steam integration. Windows also has an updater and online UI.
+   Reuse underlying configuration/preparation concepts and scripts; Windows API,
+   update and cache-deletion code cannot simply be used on macOS. Online support
+   in the Windows README is not validation of online play in this Mac build.
+   See launcher/bbport_launcher_win.py, launcher/bbport_launcher.py, scripts/mods.py,
+   scripts/patches.py, run.py. Avoid a fourth independent set of setting defaults.
+
+Comparison with other projects (official sources)
+
+Zelda64Recomp: plug-and-play asset selection; an in-game menu navigable with
+mouse/controller/keyboard; remapping, deadzones, axis inversion, gyro aiming;
+mod installation/toggles; optional autosaving. Borrow the unified menu and input
+workflow. Gyro and autosaving are game-specific implementations, not free UI work.
+https://github.com/Zelda64Recomp/Zelda64Recomp#features
+
+Ship of Harkinian: authentic behavior can be retained through optional enhancement
+toggles. Its changelog documents option search, menu reorganization, mod ordering,
+accessibility settings and text-to-speech. Borrow discoverability and separation
+of convenience/accessibility from cheats. Reading Bloodborne's in-game text aloud
+would need access to game text, beyond adding accessibility to the launcher.
+https://www.shipofharkinian.com/
+https://www.shipofharkinian.com/changelog
+
+UnleashedRecomp: guided installation, separate save/config storage, a mod loader
+compatible with Hedge Mod Manager, and updates that preserve user data. The
+README explicitly warns against modifying installed game data for mods. Borrow
+the managed asset layer and compatibility explanations. Its README still puts
+keyboard rebinding in config.toml; it is not a model for a complete remapping UI.
+https://github.com/hedge-dev/UnleashedRecomp/blob/main/README.md
+
+Dolphin: controller selection, binding capture, saved input profiles, configurable
+hotkeys and background-input behavior. Borrow profiles and a clear mapping screen,
+including controller identity and a way to recover from conflicting shortcuts.
+https://dolphin-emu.org/docs/guides/configuring-controllers/
+
+PPSSPP: binding editor, analog calibration, trigger threshold, focus behavior and
+a keyboard analog limiter. Save-state backups enable undoing state operations.
+Borrow input tuning and the recovery/undo principle for save-file imports. State
+serialization is a separate capability; backing up Bloodborne save files does
+not provide instant resume or save-anywhere.
+https://www.ppsspp.org/docs/settings/controls/
+https://www.ppsspp.org/docs/settings/system/
+
+PCSX2: automatic game fixes, per-game configuration and a controller-driven Big
+Picture interface. Borrow automatic validated compatibility choices, then expose
+personal preferences. Because this port runs one game, profiles should represent
+user setups/builds rather than introduce an unnecessary multi-game library.
+https://pcsx2.net/blog/2024/pcsx2-2-release/
+
+RPCS3: custom per-game configurations and a patch manager with recommendations
+and conditions described on game pages. Borrow patch provenance, version gating,
+and an explanation of conflicts/dependencies instead of a raw checkbox list.
+https://wiki.rpcs3.net/index.php?title=Help%3AFrequently_Asked_Questions
+https://wiki.rpcs3.net/index.php?title=Drakengard_3
+
+shadPS4: its separate official Qt launcher downloads released and prerelease
+runtime versions. Borrow separation of launcher and runtime, with a visible build
+identity and a way to return to a retained working build. Updates need a macOS
+release channel and validation; do not point a Mac updater at Windows assets.
+https://www.shadps4.net/downloads/
+https://github.com/shadps4-emu/shadps4-qtlauncher/blob/main/README.md
+
+OpenEmu: a cohesive Mac app, drag-and-drop import and controller preferences with
+automatic mappings. Borrow familiar Finder integration and controller selection.
+A large cover-art library is unnecessary for a single-game Bloodborne launcher.
+https://openemu.org/
+
+Proposed information architecture
+
+Home: Play; selected game folder/version; active profile; connected controller;
+last session result; latest backup time. A clear "Change game folder" action.
+Display: output resolution, render resolution, frame-rate target, fullscreen,
+upscaling/AA. Show actual render/output dimensions and effective settings.
+Controls: device selector, binding capture, input test, deadzones, camera response,
+rumble strength, touchpad equivalents, keyboard bindings and reset per device.
+Saves: current save location, import/export, dated backups, restore with preview.
+Mods & patches: installed entries, enabled state, order/conflicts, required game
+version, source, and whether a restart is needed. Preserve original game assets.
+Help: controller diagram, known issues by build, reveal logs, export diagnostics.
+Advanced: renderer experiments, reactive-mask/jitter debugging, developer options.
+Gameplay/accessibility preferences stay distinct from explicitly labeled cheats.
+
+In-game overlay: small navigable categories using the same names and settings as
+the launcher. Keep pending restart changes visible with "Restart later" available.
+Restart must describe lost unsaved progress; the existing restart action does not
+establish a safe save checkpoint. Basic UI text should not expose env-var names.
+
+Prioritized implementation plan and acceptance criteria
+
+P0 — Launch and recovery. Small/medium frontend work; no renderer redesign.
+* Restore the missing packaged defaults and check game version every launch.
+* Persistent launch status: Checking files -> Preparing -> Compiling shaders ->
+  Starting game. Show real counts when available, otherwise an honest activity
+  state with elapsed time. Offer details; never fabricate a percent or ETA.
+* Distinguish first-start work, cached startup, failure and lack of progress.
+  Log inactivity alone is not proof that compilation or gameplay is hung.
+* Add reveal-in-Finder actions, change-folder UI, crash recovery and backup list.
+* Acceptance: first run, later run, missing/moved game folder, wrong version,
+  missing Rosetta and failed preparation all have an actionable visible outcome.
+
+P1 — Settings and controls. Medium UI plus input-runtime work.
+* Searchable categories, practical tooltips, category reset, explicit active vs
+  next-launch values, and a visible explanation when an environment override wins.
+* Keep stock effects as the baseline. Separate resolution from FPS target and
+  never advertise an unmeasured "45 FPS" performance preset as a guarantee.
+* Bindings, device selection, deadzones, touchpad equivalents, hotplug notice,
+  keyboard/controller coexistence and optional mouse-camera input. A mouse-to-stick
+  bridge has different feel from native mouse camera; validate before naming it.
+* Acceptance: configure and navigate all overlay pages by controller alone; no
+  accidental gameplay inputs; unplug/reconnect recovers; key conflicts are shown;
+  settings persist and round-trip through both launcher and overlay.
+
+P1 — Save management and diagnostics. Medium workflow work.
+* Import preview, content-verified retained backup, restore/export, no active-game
+  save replacement. Backups on clean exit can follow once write completion is known.
+* Lightweight frame-time graph, FPS, shader-work status and session summary using
+  existing CPU/present counters. Do not enable the intrusive GPU profiler for a HUD.
+* "Report a graphics issue" records optional screenshot, selected settings, build,
+  game version and enabled patches. Preview the bundle; exclude saves, credentials
+  and personal paths by default. Do not automatically upload reports.
+* Acceptance: recover previous bytes after an import; failed copy leaves recoverable
+  files; no pruning; exported report is useful for comparing two builds.
+
+P2 — Mods, packaging polish and updates. Medium/larger integration work.
+* Reuse the existing mod-view/preparation layer; add ordering and conflict previews.
+* Mac menu commands, fullscreen/window restoration, clear Dock identity, scalable
+  text, keyboard focus and native launcher accessibility. EN/RU parity initially.
+* Retained-build rollback and stable/experimental channels when release packaging
+  exists; game data and saves live outside replaceable app binaries.
+* Cache recovery should switch to a new generation and retain the old one.
+
+Separate runtime investigations, not launch promises
+
+Safe offline pause (guest threads, timers, audio and GPU must stop/resume coherently);
+controller-disconnect/focus-loss pause; save states/rewind; direct Continue;
+gyro/native mouse camera; game HUD/subtitle scaling; persistent local trophies.
+src/runtime_services.c currently logs trophy unlocks but does not provide a complete
+persistent achievement UI. Do not label those as Steam or RetroAchievements support.
+Direct Continue needs a reliable game-state hook; timed benchmark keypresses are
+not a dependable user-facing resume feature. Online sessions require separate
+pause and compatibility behavior. Ultrawide/HDR need rendering validation.
+
+Implementation boundary
+
+Keep preparation and launching in a testable shared service; expose structured
+phase/events and one settings schema (type, default, availability, restart rule,
+category, validation). Have the launcher and existing ImGui overlay consume that
+contract. A native Mac front end is a good fit for file dialogs, menus and
+accessibility; retaining ImGui avoids coupling in-game UI to a host UI rewrite.
+Choose the frontend toolkit after a small packaging/input prototype, not from
+appearance alone. Do not build a new settings backend for each interface.
+
+Validation can mostly run without the shared GPU slot: fake launch events, fixture
+game folders, input mapping unit tests, save-copy failures, config round-trips and
+localization checks. Then queue one packaged-app smoke test and a short gameplay
+check for overlay focus, controller navigation, restart and HUD overhead.
+
+Completed during investigation
+
+Removed automatic old-backup deletion in the Mac launcher and corrected its user
+README. A retained fixture test created 21 old snapshots, verified a new snapshot
+was added while all previous bytes remained unchanged, and verified a second call
+with an unchanged save made no duplicate. Deletion calls were forbidden by a mock.
+Evidence: out/macos/launcher-retention-fju_a5bo/result.txt.
+This source change has not been packaged into an updated .app in this task.
