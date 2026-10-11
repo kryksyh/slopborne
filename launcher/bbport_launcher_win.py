@@ -345,6 +345,7 @@ def game_environment(s):
     env['BB_PATCHES_DIR'] = s['patches_dir'] or str(DATA_DIR / 'patches')
     env['BB_PATCHES_CONFIG'] = str(DATA_DIR / 'patches.json')
     env['BB_LANGUAGE'] = s['language']
+    env['BB_UI_LANGUAGE'] = LANG
     if str(s['player_name']).strip():
         env['BB_USER_NAME'] = str(s['player_name']).strip()
     env['BB_FULLSCREEN'] = '1' if s['fullscreen'] else '0'
