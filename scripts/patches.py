@@ -256,7 +256,7 @@ def eboot_bytes(elf,start,end):
 # with --print-fingerprint (after a run of CUSA03173 v01.09) when those patches change.
 BUILTIN_XML=Path(__file__).resolve().parent.parent/'patches/Bloodborne.xml'
 FINGERPRINT_PATCHES=sorted({n for names in FPS_PRESETS.values() for n in names}|{RESOLUTION_TEMPLATE})
-PATCH_FINGERPRINTS={'01.09':'913bc4cd755826817f1fe6b5b1ecb8bebd6887889ef2a0561c5ad5802641e3d4'}
+PATCH_FINGERPRINTS={'01.09':'34e41d1df9e3805762bfd59054e69fe60c330b9b6df7906fa7f66a43c939fbf0'}
 
 
 def patch_sites(xml,app_version,names=FINGERPRINT_PATCHES):
