@@ -53,6 +53,11 @@ EFFECTS={
     'tweak_fast_deflate':(None,'Fast Run-time Deflate'),
     'tweak_post_processors':(None,'All Resource Post-Processors In Play'),
 }
+# Always applied. Draw requests the GX workers queue in a frame come from one of two 256 KB
+# heaps (0x2195c09, 0x2195c46: mov edx, 0x40000), emptied when the frame advances; entering an area
+# (m24 -> m27) overran it and the game copied into the null allocation (GoncaloLobo0 094f3bca).
+DRAW_REQUEST_HEAPS='Larger Per-Frame Draw Request Heaps'
+
 # model_lod: -2 highest, 0 the game's, 1 lower, 2 lowest.
 MODEL_LOD={'-2':'Model LOD -2 (Highest)','1':'Model LOD 1 (Lower)','2':'Model LOD 2 (Lowest)'}
 
@@ -437,6 +442,8 @@ def main():
         return
     names=FPS_PRESETS[a.fps]+[n.strip() for n in a.extra.split(';') if n.strip()]
     names+=[n for n in effect_patches(read_settings(a.settings)) if n not in names]
+    if DRAW_REQUEST_HEAPS not in names:
+        names.append(DRAW_REQUEST_HEAPS)
     validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
