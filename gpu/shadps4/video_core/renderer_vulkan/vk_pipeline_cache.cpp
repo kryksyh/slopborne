@@ -562,11 +562,27 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                         draw_regs.depth_control.depth_write_enable &&
                         depth_func != AmdGpu::CompareFunc::Always &&
                         depth_func != AmdGpu::CompareFunc::Never;
-    if (!it->second->IsReady() && it->second->StandInReady() && opaque) {
-        return it->second.get();
-    }
     if (!it->second->IsReady()) {
+        const auto& pipeline = *it->second;
+        auto& stats = async_compiler->stats;
+        if (pipeline.AnyStandInReady() && opaque) {
+            ++stats.stand_in_draws;
+            if (pipeline.StandInReady()) {
+                stats.textured_draws += pipeline.StandInTextured();
+            } else {
+                ++stats.shared_draws;
+            }
+            return it->second.get();
+        }
         ++skipped_draws;
+        if (!opaque) {
+            ++stats.skipped_transparent;
+        } else if (!pipeline.HasStandIn()) {
+            ++stats.skipped_no_stand_in;
+        } else {
+            ++stats.skipped_pending;
+        }
+        async_compiler->MaybeReport();
         return nullptr;
     }
     if (it->second->Failed()) {

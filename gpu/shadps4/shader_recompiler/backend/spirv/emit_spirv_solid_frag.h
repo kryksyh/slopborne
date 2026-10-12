@@ -5,7 +5,9 @@
 #include <array>
 #include <span>
 #include <vector>
+
 #include "common/types.h"
+#include "shader_recompiler/info.h"
 
 namespace Shader::Backend::SPIRV {
 
@@ -15,6 +17,11 @@ struct SolidOutput {
     u32 location;
     std::array<float, 4> color;
 };
-[[nodiscard]] std::vector<u32> EmitSolidFragmentShader(std::span<const SolidOutput> outputs);
+
+/// With `textured`, the output at `textured_location` samples the shader's own texture
+/// (Info::StandIn::Target) instead of a constant; `alpha_test` drops texels with alpha under 0.5.
+[[nodiscard]] std::vector<u32> EmitSolidFragmentShader(
+    std::span<const SolidOutput> outputs, const Info::StandIn::Target* textured = nullptr,
+    u32 textured_location = 0, bool alpha_test = false);
 
 } // namespace Shader::Backend::SPIRV

@@ -108,8 +108,25 @@ public:
     bool StandInReady() const noexcept {
         return stand_in_ready.load(std::memory_order_acquire);
     }
+    bool SharedStandInReady() const noexcept {
+        return shared_stand_in && shared_stand_in->ready.load(std::memory_order_acquire);
+    }
+    bool AnyStandInReady() const noexcept {
+        return StandInReady() || SharedStandInReady();
+    }
+    bool HasStandIn() const noexcept {
+        return static_cast<bool>(stand_in_module) || shared_stand_in;
+    }
+    bool StandInTextured() const noexcept {
+        return stand_in_textured;
+    }
+    /// The pipeline itself once compiled; until then its own (textured) stand-in, else the
+    /// shared one.
     vk::Pipeline Handle() const noexcept {
-        return IsReady() || !StandInReady() ? *pipeline : *stand_in;
+        if (IsReady() || !AnyStandInReady()) {
+            return *pipeline;
+        }
+        return StandInReady() ? *stand_in : *shared_stand_in->pipeline;
     }
 
     /// bbport: the background or preloaded compile failed; the cache compiles it again.
@@ -140,7 +157,16 @@ public:
     /// bbport: create-info of a compile handed to the AsyncCompiler, until it ran.
     struct CreateInfo;
     std::shared_ptr<CreateInfo> pending;
-    vk::UniqueShaderModule stand_in_module;
+    vk::ShaderModule stand_in_module; ///< from AsyncCompiler::StandInModule
+    bool stand_in_textured{};
+    SharedStandIn* shared_stand_in{};
+    AsyncCompiler* async{};
+    std::chrono::steady_clock::time_point queued{};
+    u64 SinceQueuedMs() const {
+        return u64(std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - queued)
+                       .count());
+    }
     vk::UniquePipeline stand_in;
     std::atomic<bool> stand_in_ready{false};
     vk::PipelineCache pending_cache;

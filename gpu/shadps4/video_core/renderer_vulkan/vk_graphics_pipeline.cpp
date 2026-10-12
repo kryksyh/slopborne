@@ -470,6 +470,8 @@ GraphicsPipeline::GraphicsPipeline(
         pending = std::move(ci);
         pending_cache = pipeline_cache;
         pending_name = debug_str;
+        this->async = async;
+        queued = std::chrono::steady_clock::now();
         QueueStandIn(*async);
         async->Submit([this] { CompileNow(); });
     } else {
@@ -479,11 +481,18 @@ GraphicsPipeline::GraphicsPipeline(
 
 void GraphicsPipeline::QueueStandIn(AsyncCompiler& async) {
     const auto& ci = *pending;
-    if (ci.shader_stages.size() != 2 || ci.shader_stages[0].stage != vk::ShaderStageFlagBits::eVertex ||
-        ci.shader_stages[1].stage != vk::ShaderStageFlagBits::eFragment) {
-        return;
+    const auto fragment = std::ranges::find(ci.shader_stages, vk::ShaderStageFlagBits::eFragment,
+                                            &vk::PipelineShaderStageCreateInfo::stage);
+    const bool has_geometry = std::ranges::any_of(ci.shader_stages, [](const auto& stage) {
+        return stage.stage == vk::ShaderStageFlagBits::eGeometry;
+    });
+    if (fragment == ci.shader_stages.end() || has_geometry) {
+        return; // nothing to replace, or a geometry stage (whose own draws are replayed)
     }
     std::vector<Shader::Backend::SPIRV::SolidOutput> outputs;
+    const auto* fs_info = stages[u32(Shader::SwStage::Fragment)];
+    const Shader::Info::StandIn::Target* textured = nullptr;
+    u32 textured_location = 0;
     for (u32 i = 0; i < key.num_color_attachments; ++i) {
         if (ci.attachments[i].blendEnable) {
             return; // blended effects stay out until their own pipeline is ready
@@ -496,33 +505,82 @@ void GraphicsPipeline::QueueStandIn(AsyncCompiler& async) {
         if (name.find("int") != std::string::npos) {
             return; // integer targets need integer outputs
         }
-        // A dark grey surface in 8-bit (G-buffer albedo, material) targets; float targets
-        // (emissive, lighting) stay black, so it is lit by the scene and does not glow.
+        // Float targets (emissive, lighting) stay black, so the surface is lit by the scene and
+        // does not glow. The game's G-buffer: target 0 normals, 2 base color (sRGB); the
+        // constants are scene averages of those, a dark grey elsewhere.
         const bool is_float = name.find("float") != std::string::npos;
-        const float level = is_float ? 0.0f : 0.15f;
-        outputs.push_back({i, {level, level, level, 1.0f}});
+        const bool is_srgb = name.find("Srgb") != std::string::npos;
+        const bool gbuffer = key.num_color_attachments >= 4;
+        std::array<float, 4> color{0.15f, 0.15f, 0.15f, 1.0f};
+        if (is_float) {
+            color = {0.0f, 0.0f, 0.0f, 1.0f};
+        } else if (is_srgb) {
+            color = {0.30f, 0.27f, 0.22f, 0.9f};
+        } else if (gbuffer && i == 0) {
+            color = {0.30f, 0.60f, 0.30f, 0.0f};
+        }
+        outputs.push_back({i, color});
+        // The base color target shows the shader's own texture when the translation found it.
+        if (is_srgb && !textured && fs_info && fs_info->stand_in.targets[i].valid) {
+            textured = &fs_info->stand_in.targets[i];
+            textured_location = i;
+        }
     }
-    const auto spirv = Shader::Backend::SPIRV::EmitSolidFragmentShader(outputs);
-    auto [module_result, module] = instance.GetDevice().createShaderModuleUnique(
-        {.codeSize = spirv.size() * sizeof(u32), .pCode = spirv.data()});
-    if (module_result != vk::Result::eSuccess) {
+    const size_t fragment_index = fragment - ci.shader_stages.begin();
+    const auto build = [this, fragment_index](const CreateInfo& ci, vk::ShaderModule module) {
+        auto shader_stages = ci.shader_stages;
+        shader_stages[fragment_index] = vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eFragment,
+            .module = module,
+            .pName = "main",
+        };
+        auto info = ci.pipeline_info;
+        info.pStages = shader_stages.data();
+        auto [result, pipe] = instance.GetDevice().createGraphicsPipelineUnique(pending_cache, info);
+        return result == vk::Result::eSuccess ? std::move(pipe) : vk::UniquePipeline{};
+    };
+    // The grey stand-in is shared with every pipeline that differs only in the fragment shader:
+    // the vertex stages and the render state are the whole key. Under MoltenVK the descriptor
+    // set of this pipeline binds the vertex-stage resources at the same Metal indices (the
+    // vertex bindings come first and are identical), and the solid fragment shader reads none.
+    auto shared_key = key;
+    shared_key.stage_hashes[u32(Shader::SwStage::Fragment)] = 0;
+    u64 key_hash = XXH3_64bits(&shared_key, sizeof(shared_key));
+    for (const auto& stage : ci.shader_stages) {
+        if (stage.stage != vk::ShaderStageFlagBits::eFragment) {
+            const VkShaderModule module = stage.module;
+            key_hash = XXH3_64bits_withSeed(&module, sizeof(module), key_hash);
+        }
+    }
+    bool created = false;
+    shared_stand_in = &async.SharedStandInFor(key_hash, created);
+    if (created) {
+        const auto grey = Shader::Backend::SPIRV::EmitSolidFragmentShader(outputs);
+        if (const auto module = async.StandInModule(instance, grey)) {
+            async.SubmitFront([this, ci = pending, module, shared = shared_stand_in, build] {
+                if (auto pipe = build(*ci, module)) {
+                    shared->pipeline = std::move(pipe);
+                    shared->ready.store(true, std::memory_order_release);
+                    this->async->stats.NoteStandIn(SinceQueuedMs());
+                }
+            });
+        }
+    }
+    if (!textured) {
+        return; // the shared grey stand-in is all this pipeline could show
+    }
+    const auto spirv = Shader::Backend::SPIRV::EmitSolidFragmentShader(
+        outputs, textured, textured_location, fs_info->stand_in.alpha_test);
+    stand_in_module = async.StandInModule(instance, spirv);
+    if (!stand_in_module) {
         return;
     }
-    stand_in_module = std::move(module);
-    async.SubmitFront([this, ci = pending] {
+    stand_in_textured = true;
+    async.SubmitFront([this, ci = pending, build] {
         if (IsReady()) {
             return;
         }
-        auto stages = ci->shader_stages;
-        stages[1] = vk::PipelineShaderStageCreateInfo{
-            .stage = vk::ShaderStageFlagBits::eFragment,
-            .module = *stand_in_module,
-            .pName = "main",
-        };
-        auto info = ci->pipeline_info;
-        info.pStages = stages.data();
-        auto [result, pipe] = instance.GetDevice().createGraphicsPipelineUnique(pending_cache, info);
-        if (result == vk::Result::eSuccess) {
+        if (auto pipe = build(*ci, stand_in_module)) {
             stand_in = std::move(pipe);
             stand_in_ready.store(true, std::memory_order_release);
         }
@@ -533,6 +591,7 @@ void GraphicsPipeline::CompileNow() {
     Create(pending_cache, pending->pipeline_info, pending_name, true);
     pending.reset();
     ready.store(true, std::memory_order_release);
+    async->stats.NoteReady(SinceQueuedMs());
 }
 
 void GraphicsPipeline::Create(vk::PipelineCache pipeline_cache,

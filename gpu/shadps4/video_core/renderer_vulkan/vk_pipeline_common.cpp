@@ -6,6 +6,10 @@
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 
+#include <cstdio>
+#include <xxhash.h>
+
+#include "bbport_toggles.h"
 #include "common/thread.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -24,6 +28,9 @@ Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorH
 Pipeline::~Pipeline() = default;
 
 AsyncCompiler::AsyncCompiler(u32 num_threads) {
+    if (const char* env = std::getenv("BB_COMPILE_WORKERS"); env && std::atoi(env) > 0) {
+        num_threads = u32(std::atoi(env));
+    }
     for (u32 i = 0; i < num_threads; ++i) {
         threads.emplace_back([this](std::stop_token stop) { Worker(stop); });
     }
@@ -57,6 +64,70 @@ void AsyncCompiler::SubmitFront(std::function<void()>&& job) {
 
 void AsyncCompiler::MarkWarmUpQueued() {
     warm_up.store(submitted.load(std::memory_order_relaxed), std::memory_order_release);
+}
+
+vk::ShaderModule AsyncCompiler::StandInModule(const Instance& instance, std::span<const u32> spirv) {
+    const u64 hash = XXH3_64bits(spirv.data(), spirv.size_bytes());
+    std::scoped_lock lock{modules_mutex};
+    auto& module = stand_in_modules[hash];
+    if (!module) {
+        auto [result, created] = instance.GetDevice().createShaderModuleUnique(
+            {.codeSize = spirv.size_bytes(), .pCode = spirv.data()});
+        if (result != vk::Result::eSuccess) {
+            return {};
+        }
+        module = std::move(created);
+    }
+    return *module;
+}
+
+SharedStandIn& AsyncCompiler::SharedStandInFor(u64 key_hash, bool& created) {
+    std::scoped_lock lock{modules_mutex};
+    auto& shared = shared_stand_ins[key_hash];
+    created = !shared;
+    if (created) {
+        shared = std::make_unique<SharedStandIn>();
+    }
+    return *shared;
+}
+
+void AsyncCompiler::MaybeReport() {
+    if (!BbStats::enabled) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_report < std::chrono::seconds(5)) {
+        return;
+    }
+    const u64 total = stats.stand_in_draws + stats.skipped_transparent +
+                      stats.skipped_no_stand_in + stats.skipped_pending;
+    if (total == last_report_total) {
+        return;
+    }
+    last_report = now;
+    last_report_total = total;
+    size_t queued = 0;
+    {
+        std::scoped_lock lock{mutex};
+        queued = jobs.size();
+    }
+    const auto avg = [](const std::atomic<u64>& sum, const std::atomic<u64>& count) {
+        return count ? double(sum) / double(count) : 0.0;
+    };
+    std::printf("Async pipelines: %llu stand-in draws (%llu textured, %llu shared); skipped %llu transparent, "
+                "%llu without stand-in, %llu stand-in pending; stand-in after %.0f ms avg, %llu max "
+                "(%llu); ready after %.0f ms avg, %llu max (%llu); %zu compiles queued\n",
+                static_cast<unsigned long long>(stats.stand_in_draws),
+                static_cast<unsigned long long>(stats.textured_draws),
+                static_cast<unsigned long long>(stats.shared_draws),
+                static_cast<unsigned long long>(stats.skipped_transparent),
+                static_cast<unsigned long long>(stats.skipped_no_stand_in),
+                static_cast<unsigned long long>(stats.skipped_pending),
+                avg(stats.stand_in_ms, stats.stand_ins),
+                static_cast<unsigned long long>(stats.stand_in_max_ms),
+                static_cast<unsigned long long>(stats.stand_ins), avg(stats.ready_ms, stats.readies),
+                static_cast<unsigned long long>(stats.ready_max_ms),
+                static_cast<unsigned long long>(stats.readies), queued);
 }
 
 void AsyncCompiler::Worker(std::stop_token stop) {

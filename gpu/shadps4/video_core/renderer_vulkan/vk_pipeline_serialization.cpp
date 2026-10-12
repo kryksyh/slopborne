@@ -20,8 +20,8 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // checked buffer and null-resource access
-static constexpr u32 ShaderMetaVersion = 10u; // Preserve typed interfaces for missing image resources
-static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderMetaVersion = 11u; // bbport: Info::StandIn
+static constexpr u32 PipelineKeyVersion = 6u; // bbport: Info layout (InfoPersistent::StandIn)
 } // namespace Serialization
 
 namespace Vulkan {

@@ -1083,6 +1083,7 @@ void EmitContext::DefineImagesAndSamplers() {
             .is_integer = is_integer,
             .is_storage = is_storage,
             .mip_fallback_mode = mip_fallback_mode,
+            .unified_binding = binding.unified - num_bindings,
         });
         interfaces.push_back(id);
     }
@@ -1098,6 +1099,7 @@ void EmitContext::DefineImagesAndSamplers() {
     sampler_pointer_type = TypePointer(spv::StorageClass::UniformConstant, sampler_type);
     for (const auto& samp_desc : info.samplers) {
         const Id id{AddGlobalVariable(sampler_pointer_type, spv::StorageClass::UniformConstant)};
+        sampler_bindings.push_back(binding.unified);
         Decorate(id, spv::Decoration::Binding, binding.unified++);
         Decorate(id, spv::Decoration::DescriptorSet, 0U);
         Name(id, fmt::format("{}_{}{}", hw_stage, "samp", samplers.size()));

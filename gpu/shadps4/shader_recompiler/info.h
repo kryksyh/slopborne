@@ -75,6 +75,20 @@ struct InfoPersistent {
     bool has_fetch_shader{};
     bool has_bitwise_xor{};
     bool uses_dma{};
+    /// bbport: what a stand-in fragment shader can show while this shader's pipeline compiles
+    /// in the background (RecordStandIn): per render target, the 2D texture whose sample feeds
+    /// it and the interpolant it is sampled with.
+    struct StandIn {
+        struct Target {
+            bool valid{};
+            u32 image_binding{};
+            u32 sampler_binding{};
+            u32 location{};               ///< fragment input location of the interpolant
+            std::array<u8, 2> uv_comps{}; ///< its components used as u and v
+        };
+        std::array<Target, IR::NumRenderTargets> targets{};
+        bool alpha_test{}; ///< the shader discards: texels with alpha under 0.5 are dropped
+    } stand_in{};
 
     InfoPersistent() = default;
     InfoPersistent(HwStage hw_stage_, SwStage sw_stage_, u64 pgm_hash_)
