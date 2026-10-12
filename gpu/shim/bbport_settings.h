@@ -6,6 +6,8 @@
 #pragma once
 
 #include <atomic>
+#include <string>
+#include "bbport_controller_prompts.h"
 
 namespace BbSettings {
 
@@ -67,6 +69,13 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    std::atomic<int> controller_layout{BbPrompts::Auto};
+    // Frontend-only, protected by the overlay mutex after startup Load().
+    std::string controller_device;
+    BbPrompts::FaceMap controller_map = BbPrompts::Identity;
+    int startup_controller_layout = BbPrompts::Auto;
+    std::string startup_controller_device;
+    BbPrompts::FaceMap startup_controller_map = BbPrompts::Identity;
     // FSR 4 checks (menu): the provider's auto exposure, the jitter sign it is given.
     std::atomic<bool> fsr4_auto_exposure{true};
     std::atomic<bool> fsr4_invert_jitter{false};

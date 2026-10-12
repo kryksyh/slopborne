@@ -75,7 +75,7 @@ cmake -S gpu -B "$gpu_build_dir" -G Ninja -DCMAKE_BUILD_TYPE="$gpu_build_type" \
     -DVulkan_INCLUDE_DIR="$host_prefix/include" -DVulkan_LIBRARY="$intel_prefix/lib/libMoltenVK.dylib" \
     -DOPENSSL_INCLUDE_DIR="$prefix/include" -DOPENSSL_CRYPTO_LIBRARY="$prefix/lib/libcrypto.dylib" \
     -DOPENSSL_SSL_LIBRARY="$prefix/lib/libssl.dylib" -DBB_LTO="$gpu_lto" -DBB_PGO=off
-if ! cmake --build "$gpu_build_dir" --target bb-probe bb-gpu-capabilities -j "${BB_JOBS:-6}" > out/macos/gpu-build.log 2>&1; then
+if ! cmake --build "$gpu_build_dir" --target bb-probe bb-gpu-capabilities bb-controller-info -j "${BB_JOBS:-6}" > out/macos/gpu-build.log 2>&1; then
     tail -60 out/macos/gpu-build.log >&2
     echo 'Build failed; full log: out/macos/gpu-build.log' >&2
     exit 1

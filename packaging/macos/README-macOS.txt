@@ -31,6 +31,26 @@ Playing
   Effects, cheats, the FPS counter and the resolution are there.
 - The game runs at 30 FPS with even frame pacing.
 
+Controller button prompts
+-------------------------
+Open settings with Cmd+, or L3+R3, then expand Controller buttons.
+- Automatic reads the connected controller's face-button labels. On a Nintendo
+  layout, PlayStation Cross corresponds to B, Circle to A, Square to Y, Triangle to X.
+- If Steam or controller firmware hides the layout, choose Nintendo, Xbox or
+  PlayStation under Button labels. Positions is available for unlabelled buttons.
+- If your buttons are swapped in Steam, use Calibrate remapped face buttons:
+  press and release the physical bottom, right, left and top face buttons in order.
+  This supports a one-to-one remapping of the four face inputs. Options/Menu or
+  Esc cancels without replacing your previous calibration.
+- Calibration is saved for the detected controller type. Repeat it after changing
+  Steam or firmware mappings. Labels never change gameplay bindings.
+- The launcher generates matching face-button glyphs for the original game menus
+  and dialogs in a separate asset view. Restart the game after changing labels or
+  calibration. Original game files are never overwritten. Port name-entry prompts
+  change immediately. Unknown controllers retain PlayStation glyphs until you
+  choose a layout. Connect the controller before launching for automatic detection.
+The game continues running while settings are open.
+
 Your files
 ----------
 Everything the app writes is in ~/Library/Application Support/Bloodborne

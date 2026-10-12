@@ -9,7 +9,9 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 probe=${BB_PROBE:-out/macos/gpu-performance/bb-probe}
 caps=$(dirname -- "$probe")/bb-gpu-capabilities
+controller=$(dirname -- "$probe")/bb-controller-info
 [[ -x $probe ]] || { echo "No $probe: run bash build.sh --performance (or set BB_PROBE)" >&2; exit 1; }
+[[ -x $controller ]] || { echo "No $controller: rebuild the controller helper" >&2; exit 1; }
 [[ -x $caps ]] || caps=out/macos/gpu/bb-gpu-capabilities
 version=${BB_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 stage=$PWD/out/macos/package-$(date +%Y%m%d-%H%M%S)
@@ -32,7 +34,7 @@ iconutil -c icns "$iconset" -o "$stage/Bloodborne.icns"
 
 # The preparation scripts run inside the frozen executable (--script): their standard modules.
 hidden=()
-for module in argparse base64 collections hashlib json re shutil struct tempfile xml.etree.ElementTree \
+for module in argparse base64 collections hashlib json math re shutil struct tempfile xml.etree.ElementTree \
               urllib.request zipfile ctypes shlex time; do
     hidden+=(--hidden-import "$module")
 done
@@ -57,8 +59,8 @@ if [[ -d $pipelines ]]; then
     cp "$pipelines"/*.key "$pipelines"/*.meta "$pipelines"/*.fetch "$contents/Resources/port/pipelines/"
 fi
 cp packaging/macos/app/bbport.ini "$contents/Resources/"
-cp "$probe" "$caps" "$contents/MacOS/"
-python3 packaging/macos/bundle_dylibs.py "$app" bb-probe "$(basename -- "$caps")"
+cp "$probe" "$caps" "$controller" "$contents/MacOS/"
+python3 packaging/macos/bundle_dylibs.py "$app" bb-probe "$(basename -- "$caps")" bb-controller-info
 
 plist=$contents/Info.plist
 set_plist() { /usr/libexec/PlistBuddy -c "Delete :$1" "$plist" 2>/dev/null || true

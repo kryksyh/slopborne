@@ -14,6 +14,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_controller_sdl.h"
 #include "imgui.h"
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -73,11 +74,28 @@ float base_scale = 1.0f;
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
 
+SDL_Gamepad* prompt_pad = nullptr; // own SDL reference; window thread opens/closes it
+SDL_JoystickID prompt_id = 0;
+std::atomic<bool> prompt_connected{false};
+std::string prompt_name, prompt_device;
+std::array<const char*, 4> detected_labels{};
+Uint64 next_controller_scan = 0;
+bool calibrating = false;
+BbPrompts::Calibration calibration;
+
+const char* FaceLabel(int logical) {
+    const auto& s = BbSettings::Get();
+    const auto& map = !prompt_device.empty() && s.controller_device == prompt_device
+                          ? s.controller_map : BbPrompts::Identity;
+    return BbPrompts::Label(s.controller_layout, logical, map, detected_labels);
+}
+
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
     ImGui::GetIO().MouseDrawCursor = value;
+    if (!value) calibrating = false;
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -189,6 +207,61 @@ void Hint(const char* text) {
     }
 }
 
+void ControllerMenu() {
+    if (!ImGui::CollapsingHeader(T("Controller buttons"))) return;
+    auto& s = BbSettings::Get();
+    if (prompt_connected) {
+        ImGui::TextWrapped("%s", prompt_name.c_str());
+    } else {
+        ImGui::TextUnformatted(T("No controller connected"));
+    }
+    static const char* layouts[] = {"Automatic", "PlayStation", "Xbox", "Nintendo", "Positions"};
+    const int layout = s.controller_layout;
+    ImGui::BeginDisabled(calibrating);
+    if (ImGui::BeginCombo(T("Button labels"), T(layouts[layout]))) {
+        for (int i = 0; i < BbPrompts::LayoutCount; ++i) {
+            if (ImGui::Selectable(T(layouts[i]), i == layout)) Store(s.controller_layout, i, true);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    ImGui::TextWrapped("%s", T("Steam or controller firmware can hide the printed layout. "
+                               "Choose Nintendo for Nintendo-style 8BitDo buttons."));
+    ImGui::TextWrapped("%s", T("Button labels change the game glyphs after restart. Controls stay the same."));
+    if (!prompt_connected) return;
+    for (int i = 0; i < 4; ++i) {
+        ImGui::Text("%s -> [%s]", T(BbPrompts::PsNames[i]), T(FaceLabel(i)));
+    }
+    ImGui::TextWrapped("%s", T("Game is still running while settings are open."));
+    if (calibrating) {
+        ImGui::TextUnformatted(T("Options/Menu or Esc cancels calibration."));
+        ImGui::Text(T("Step %d of 4: press and release the physical %s face button."),
+                    calibration.step + 1, T(BbPrompts::PositionNames[calibration.step]));
+        if (calibration.held >= 0) ImGui::TextUnformatted(T("Release the button to continue."));
+        if (calibration.error) {
+            ImGui::TextWrapped("%s", T("That input is not a new face button. Try again; "
+                                       "calibration supports four distinct face-button inputs."));
+        }
+        if (ImGui::Button(T("Cancel calibration"))) calibrating = false;
+    } else {
+        if (ImGui::Button(T("Calibrate remapped face buttons"))) {
+            calibration = {};
+            calibrating = true;
+            ImGui::GetIO().ClearInputKeys();
+        }
+        if (s.controller_device == prompt_device) {
+            ImGui::SameLine();
+            if (ImGui::Button(T("Reset calibration"))) {
+                s.controller_device.clear();
+                s.controller_map = BbPrompts::Identity;
+                dirty = true;
+            }
+            ImGui::TextUnformatted(T("Calibration saved for this controller type."));
+        }
+        ImGui::TextWrapped("%s", T("Recalibrate after changing Steam or firmware mappings."));
+    }
+}
+
 void Menu() {
     auto& s = BbSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -209,6 +282,8 @@ void Menu() {
     }
     ImGui::Text("%.0f FPS  (%.1f ms)", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f,
                 frame_ms_avg);
+
+    ControllerMenu();
 
     ImGui::SeparatorText(T("Temporal upscaler"));
     static const char* upscalers[] = {T("Off"), "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
@@ -410,7 +485,10 @@ void Menu() {
            "/ Tab. Needs DbgFont14h.ccm and DbgFont14h.tpf in dvdroot_ps4/font from Nexus mod "
            "#253. Right touchpad: Backspace."));
 
-    bool restart = s.object_motion != s.startup_object_motion ||
+    bool restart = s.controller_layout != s.startup_controller_layout ||
+                   s.controller_device != s.startup_controller_device ||
+                   s.controller_map != s.startup_controller_map ||
+                   s.object_motion != s.startup_object_motion ||
                    s.model_lod != s.startup_model_lod ||
                    s.live_resolution != s.startup_live_resolution ||
                    s.async_pipelines != s.startup_async_pipelines ||
@@ -467,7 +545,9 @@ void TextEntryBox() {
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
     ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
-    ImGui::TextDisabled("Controller: Cross (A) = OK, Circle (B) = cancel");
+    if (prompt_connected) {
+        ImGui::TextDisabled(T("Controller: [%s] = OK, [%s] = cancel"), T(FaceLabel(0)), T(FaceLabel(1)));
+    }
     ImGui::End();
 }
 
@@ -571,6 +651,47 @@ void UpdateTextInput(SDL_Window* window) {
     }
 }
 
+void ReleaseController() {
+    std::scoped_lock lock{imgui_mutex};
+    if (prompt_pad) SDL_CloseGamepad(prompt_pad);
+    prompt_pad = nullptr;
+    prompt_id = 0;
+    prompt_connected = false;
+    prompt_device.clear();
+    calibrating = false;
+    next_controller_scan = 0;
+}
+
+void UpdateController() {
+    std::scoped_lock lock{imgui_mutex};
+    const Uint64 now = SDL_GetTicks();
+    if (now < next_controller_scan) return;
+    next_controller_scan = now + 500;
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    // Match runtime_pad.c: gameplay uses the first available controller.
+    const SDL_JoystickID id = ids && count ? ids[0] : 0;
+    SDL_free(ids);
+    if (id != prompt_id || (prompt_pad && !SDL_GamepadConnected(prompt_pad))) {
+        if (prompt_pad) SDL_CloseGamepad(prompt_pad);
+        prompt_pad = id ? SDL_OpenGamepad(id) : nullptr;
+        prompt_id = prompt_pad ? id : 0;
+        prompt_connected = prompt_pad != nullptr;
+        calibrating = false;
+        l3_down = r3_down = false;
+        if (initialized) ImGui::GetIO().ClearInputKeys();
+        prompt_device.clear();
+        detected_labels = {};
+    }
+    if (!prompt_pad) return;
+    const char* name = SDL_GetGamepadName(prompt_pad);
+    prompt_name = name ? name : "Controller";
+    prompt_device = BbPrompts::DeviceKey(prompt_pad);
+    for (int i = 0; i < 4; ++i) {
+        detected_labels[i] = BbPrompts::SdlLabel(SDL_GetGamepadButtonLabel(prompt_pad, SDL_GamepadButton(i)));
+    }
+}
+
 bool HandleEvent(const SDL_Event& event) {
     std::scoped_lock lock{imgui_mutex};
     if (!initialized) {
@@ -579,12 +700,22 @@ bool HandleEvent(const SDL_Event& event) {
     ImGuiIO& io = ImGui::GetIO();
     const bool is_open = menu_open;
     switch (event.type) {
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_REMAPPED:
+        next_controller_scan = 0;
+        if (event.gdevice.which == prompt_id) calibrating = false;
+        return false;
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
         // Insert, or Cmd+, (macOS settings shortcut: Mac keyboards have no Insert key).
         const bool toggle = event.key.key == SDLK_INSERT ||
                             (event.key.key == SDLK_COMMA && (event.key.mod & SDL_KMOD_GUI));
+        if (calibrating && down && event.key.key == SDLK_ESCAPE) {
+            calibrating = false;
+            return true;
+        }
         if (down && !event.key.repeat && (toggle || (is_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(toggle ? !is_open : false);
             return true;
@@ -602,8 +733,25 @@ bool HandleEvent(const SDL_Event& event) {
     }
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
     case SDL_EVENT_GAMEPAD_BUTTON_UP: {
+        if (event.gbutton.which != prompt_id) return false;
         const bool down = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
         const u8 button = event.gbutton.button;
+        if (calibrating) {
+            if (down && button == SDL_GAMEPAD_BUTTON_START) {
+                calibrating = false;
+                return true;
+            }
+            if (down) calibration.Press(button);
+            else calibration.Release(button);
+            if (calibration.Complete()) {
+                auto& s = BbSettings::Get();
+                s.controller_map = calibration.map;
+                s.controller_device = prompt_device;
+                dirty = true;
+                calibrating = false;
+            }
+            return true;
+        }
         if (button == SDL_GAMEPAD_BUTTON_LEFT_STICK) {
             l3_down = down;
         } else if (button == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {

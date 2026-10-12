@@ -113,5 +113,13 @@ else
     bash build.sh
     probe=out/bb-probe
 fi
+if [[ $(uname -s) == Darwin ]]; then
+    helper=$(dirname -- "$probe")/bb-controller-info
+    if [[ -x $helper ]] && glyph_game=$("$PYTHON" scripts/button_glyphs.py "$game" --out "$out" --helper "$helper"); then
+        game=$glyph_game
+    else
+        echo 'Controller glyphs: replacements unavailable; using original icons' >&2
+    fi
+fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 exec "$probe" "${probe_args[@]}"

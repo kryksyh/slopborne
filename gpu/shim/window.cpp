@@ -71,6 +71,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
 }
 
 WindowSDL::~WindowSDL() {
+    BbOverlay::ReleaseController();
 #ifdef __APPLE__
     if (metal_view) SDL_Metal_DestroyView(metal_view);
 #endif
@@ -99,6 +100,7 @@ void WindowSDL::UpdateTextTitle() {
 }
 
 bool WindowSDL::PollEvents() {
+    BbOverlay::UpdateController();
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread

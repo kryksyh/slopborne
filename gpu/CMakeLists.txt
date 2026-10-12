@@ -344,6 +344,15 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+add_executable(controller-prompts-test EXCLUDE_FROM_ALL ../tests/test_controller_prompts.cpp
+    shim/bbport_settings.cpp)
+target_include_directories(controller-prompts-test PRIVATE shim)
+target_compile_options(controller-prompts-test PRIVATE -UNDEBUG)
+
+add_executable(bb-controller-info tools/controller_info.cpp shim/bbport_settings.cpp)
+target_include_directories(bb-controller-info PRIVATE shim)
+target_link_libraries(bb-controller-info PRIVATE PkgConfig::SDL3)
+
 add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
     shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
 target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)

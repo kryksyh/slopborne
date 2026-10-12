@@ -52,6 +52,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "controller_layout") {
+        v.controller_layout = std::clamp(i, 0, int(BbPrompts::LayoutCount) - 1);
+    } else if (key == "controller_device") {
+        v.controller_device = value;
+    } else if (key == "controller_map") {
+        v.controller_map = BbPrompts::ParseMap(value);
     } else if (key == "async_pipelines") {
         v.async_pipelines = i != 0;
     } else if (key == "fsr4_auto_exposure") {
@@ -134,6 +140,9 @@ void Load() {
     v.startup_async_pipelines = v.async_pipelines;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_controller_layout = v.controller_layout;
+    v.startup_controller_device = v.controller_device;
+    v.startup_controller_map = v.controller_map;
 }
 
 void ConfigureUpscalerSupport(bool fsr4, bool fsr411) {
@@ -211,6 +220,10 @@ void Save() {
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");
     std::fprintf(file, "async_pipelines=%d\n", int(v.async_pipelines.load()));
+    std::fprintf(file, "controller_layout=%d\ncontroller_device=%s\n"
+                      "controller_map=%d%d%d%d\n", v.controller_layout.load(),
+                 v.controller_device.c_str(),
+                 v.controller_map[0], v.controller_map[1], v.controller_map[2], v.controller_map[3]);
     std::fclose(file);
 }
 

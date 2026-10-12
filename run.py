@@ -100,7 +100,7 @@ def no_console():
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
 
 
-def run_script(name, *args, capture=False):
+def run_script(name, *args, capture=False, optional=False):
     # Inside the packaged Bloodborne.exe (PyInstaller) the executable runs scripts itself.
     script = ['--script'] if getattr(sys, 'frozen', False) else []
     command = [sys.executable, *script, str(PORT / 'scripts' / name), *map(str, args)]
@@ -108,6 +108,8 @@ def run_script(name, *args, capture=False):
         result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True,
                                 creationflags=no_console())
         if result.returncode:
+            if optional:
+                raise subprocess.CalledProcessError(result.returncode, command)
             sys.exit(result.returncode)
         return result.stdout
     # stdin given: the output handles are passed explicitly (a windowed Bloodborne.exe child would
@@ -196,6 +198,18 @@ def main():
                            '--enabled', env.get('BB_MODS_ENABLED', '1'), capture=True).strip())
     mod_view = game if game.resolve() != original_game else None
     try:
+        if sys.platform == 'darwin':
+            # The helper uses the same SDL identity/calibration as the overlay.
+            # Generate a retained view after user mods, without editing their files.
+            helper = probe.parent / 'bb-controller-info'
+            if helper.is_file():
+                try:
+                    game = Path(run_script('button_glyphs.py', game, '--out', out,
+                                           '--helper', helper, capture=True, optional=True).strip())
+                except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+                    print(f'Controller glyphs: could not prepare replacements: {error}; using original icons')
+            else:
+                print('Controller glyphs: bb-controller-info is missing; using original icons')
         run_script('prepare.py', game, '--out', out)
         run_script('link_libc.py', game, '--out', out)
         run_script('link_modules.py', game, '--out', out)
@@ -262,7 +276,9 @@ def main():
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
         return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
     finally:
-        if mod_view:
+        # macOS glyph views may reference a user-mod view. Retain both, along
+        # with all original files, so an existing view always stays usable.
+        if mod_view and sys.platform != 'darwin':
             shutil.rmtree(mod_view, ignore_errors=True)
 
 

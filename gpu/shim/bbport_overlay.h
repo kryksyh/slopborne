@@ -25,6 +25,9 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count);
 bool HandleEvent(const SDL_Event& event);
 /// Turns SDL text input on while the menu edits a value (window thread, once per poll).
 void UpdateTextInput(SDL_Window* window);
+/// Window thread: refresh controller identity/labels and close our SDL reference on teardown.
+void UpdateController();
+void ReleaseController();
 
 /// Whether anything is drawn this frame (menu open or FPS counter on).
 bool Visible();
