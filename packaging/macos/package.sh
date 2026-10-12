@@ -5,14 +5,24 @@
 # run.py with the preparation scripts and patches, and default settings. No game files.
 # Each run writes a new out/macos/package-<time>/; earlier packages are kept.
 # BB_PROBE selects the game executable (default: the Release build of build.sh --performance).
+# BB_RENDER_BIN optionally includes the native renderer beside the guest executable.
+# BB_GPU_CAPABILITIES / BB_CONTROLLER_INFO select companion helper builds.
+# BB_DEFAULT_INI selects the settings template; it is copied, never modified.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 probe=${BB_PROBE:-out/macos/gpu-performance/bb-probe}
-caps=$(dirname -- "$probe")/bb-gpu-capabilities
-controller=$(dirname -- "$probe")/bb-controller-info
+caps=${BB_GPU_CAPABILITIES:-$(dirname -- "$probe")/bb-gpu-capabilities}
+controller=${BB_CONTROLLER_INFO:-$(dirname -- "$probe")/bb-controller-info}
+renderer=${BB_RENDER_BIN:-}
+settings=${BB_DEFAULT_INI:-packaging/macos/app/bbport.ini}
 [[ -x $probe ]] || { echo "No $probe: run bash build.sh --performance (or set BB_PROBE)" >&2; exit 1; }
 [[ -x $controller ]] || { echo "No $controller: rebuild the controller helper" >&2; exit 1; }
-[[ -x $caps ]] || caps=out/macos/gpu/bb-gpu-capabilities
+if [[ ! -x $caps && -z ${BB_GPU_CAPABILITIES:-} ]]; then
+    caps=out/macos/gpu/bb-gpu-capabilities
+fi
+[[ -x $caps ]] || { echo "No $caps: build bb-gpu-capabilities or set BB_GPU_CAPABILITIES" >&2; exit 1; }
+[[ -z $renderer || -x $renderer ]] || { echo "No $renderer: build bb-render or unset BB_RENDER_BIN" >&2; exit 1; }
+[[ -f $settings ]] || { echo "No settings template at $settings: set BB_DEFAULT_INI to the intended packaged defaults" >&2; exit 1; }
 version=${BB_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
 stage=$PWD/out/macos/package-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$stage"
@@ -58,9 +68,16 @@ if [[ -d $pipelines ]]; then
     mkdir -p "$contents/Resources/port/pipelines"
     cp "$pipelines"/*.key "$pipelines"/*.meta "$pipelines"/*.fetch "$contents/Resources/port/pipelines/"
 fi
-cp packaging/macos/app/bbport.ini "$contents/Resources/"
-cp "$probe" "$caps" "$controller" "$contents/MacOS/"
-python3 packaging/macos/bundle_dylibs.py "$app" bb-probe "$(basename -- "$caps")" bb-controller-info
+cp "$settings" "$contents/Resources/bbport.ini"
+cp "$probe" "$contents/MacOS/bb-probe"
+cp "$caps" "$contents/MacOS/bb-gpu-capabilities"
+cp "$controller" "$contents/MacOS/bb-controller-info"
+executables=(bb-probe bb-gpu-capabilities bb-controller-info)
+if [[ -n $renderer ]]; then
+    cp "$renderer" "$contents/MacOS/bb-render"
+    executables+=(bb-render)
+fi
+python3 packaging/macos/bundle_dylibs.py "$app" "${executables[@]}"
 
 plist=$contents/Info.plist
 set_plist() { /usr/libexec/PlistBuddy -c "Delete :$1" "$plist" 2>/dev/null || true
