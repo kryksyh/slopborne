@@ -122,6 +122,10 @@ public:
     /// Retrieves image whose address matches provided
     [[nodiscard]] ImageId FindImageFromRange(VAddr address, size_t size, bool ensure_valid = true);
 
+    /// Find an unambiguous, current color image whose one array slice exactly covers this range.
+    [[nodiscard]] ImageId FindColorSliceFromRange(VAddr address, size_t size,
+                                                 SubresourceRange& range);
+
     /// bbport: a FindView result remembered by the caller for the same image and view info.
     struct ViewMemo {
         ImageId image_id{};

@@ -388,3 +388,7 @@ target_include_directories(geometry-pipeline-test PRIVATE shim shadps4 third_par
 target_link_libraries(geometry-pipeline-test PRIVATE bbgpu)
 target_include_directories(geometry-replay-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(geometry-replay-test PRIVATE bbgpu)
+
+add_executable(image-slice-clear-test EXCLUDE_FROM_ALL ../tests/test_image_slice_clear.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(image-slice-clear-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(image-slice-clear-test PRIVATE bbgpu)

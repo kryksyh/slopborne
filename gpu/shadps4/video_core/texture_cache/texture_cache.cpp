@@ -665,6 +665,38 @@ ImageId TextureCache::FindImageFromRange(VAddr address, size_t size, bool ensure
     return {};
 }
 
+ImageId TextureCache::FindColorSliceFromRange(VAddr address, size_t size,
+                                             SubresourceRange& range) {
+    ImageId result{};
+    bool ambiguous = false;
+    ForEachImageInRegion(address, size, [&](ImageId id, Image& image) {
+        const auto& info = image.info;
+        const u32 flags = std::atomic_ref(image.flags).load(std::memory_order_acquire);
+        // A partial clear must preserve all other slices. Do not discard pending uploads
+        // or reinterpret depth/compressed/multisample/volume layouts as color arrays.
+        if ((flags & u32(ImageFlagBits::Dirty)) || info.props.is_depth ||
+            info.props.is_block || info.props.is_volume || info.num_samples != 1 ||
+            image.backing->num_samples != 1 ||
+            info.resources.levels != 1 || info.resources.layers <= 1 ||
+            info.guest_size % info.resources.layers ||
+            size != info.guest_size / info.resources.layers || address < info.guest_address) {
+            return;
+        }
+        const u64 offset = address - info.guest_address;
+        if (!size || offset >= info.guest_size || offset % size) {
+            return;
+        }
+        if (result) {
+            ambiguous = true;
+            return;
+        }
+        result = id;
+        range = {.base = {.level = 0, .layer = u32(offset / size)},
+                 .extent = {.levels = 1, .layers = 1}};
+    });
+    return ambiguous ? ImageId{} : result;
+}
+
 ImageView& TextureCache::FindTexture(ImageId image_id, const ImageDesc& desc, ViewMemo* memo,
                                      bool refresh) {
     Image& image = slot_images[image_id];

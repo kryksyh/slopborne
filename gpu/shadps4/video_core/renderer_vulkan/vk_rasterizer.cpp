@@ -2703,6 +2703,42 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
         return false;
     }
 
+    // The shadow clear writes one face of an R16G16 cube map. The general shortcut
+    // below only recognizes entire images. Keep this exact specialization opt-in.
+    static const bool slice_clear = EmulatorSettingsImpl::Flag("BB_COMPUTE_SLICE_CLEAR", false);
+    if (slice_clear && !replaying_dispatch && !BbToggle::Disabled(1ull << 31) &&
+        info.pgm_hash == 0x8b355b5a && cs_pgm.dim_y == 1 &&
+        cs_pgm.dim_z == 1 && cs_pgm.num_thread_y.full == 1 &&
+        cs_pgm.num_thread_z.full == 1 && !buf1.swizzle_enable && !buf1.add_tid_enable &&
+        buf1.GetDataFmt() == AmdGpu::DataFormat::Format16_16 &&
+        buf1.GetNumberFmt() == AmdGpu::NumberFormat::Float && buf1.GetStride() == 4 &&
+        buf1.dst_sel_x == 4 && buf1.dst_sel_y == 5 &&
+        memory->IsValidGpuMapping(buf0.base_address, 16) &&
+        memory->ClampRangeSize(buf0.base_address, 16) == 16 &&
+        !buffer_cache.IsRegionGpuModified(buf0.base_address, 16)) {
+        VideoCore::SubresourceRange slice;
+        const auto id = texture_cache.FindColorSliceFromRange(buf1.base_address, buf1.GetSize(), slice);
+        if (id) {
+            auto& image = texture_cache.GetImage(id);
+            const float* values = reinterpret_cast<const float*>(buf0.base_address);
+            // These shadow clear values are exact in float16 and independent of packing
+            // rounding modes. Other values retain the original compute implementation.
+            const auto exact = [](float x) { return x == 0.0f || x == 1.0f; };
+            if (image.info.pixel_format == vk::Format::eR16G16Sfloat &&
+                exact(values[0]) && exact(values[1])) {
+                const vk::ClearValue clear{
+                    .color = {.float32 = std::array<float, 4>{values[0], values[1], 0.0f, 0.0f}}};
+                if (auto* profiler = GpuProfiler::Get()) {
+                    profiler->Mark(0xC1EA51CEull, [] { return std::string{"native shadow slice clear"}; });
+                }
+                runtime.ClearImage(&image, slice, clear);
+                static u64 count = 0;
+                if (++count == 1) std::printf("Native shadow slice clear enabled (preserving other faces)\n");
+                return true;
+            }
+        }
+    }
+
     // Find image the buffer alias
     const auto image1_id =
         texture_cache.FindImageFromRange(buf1.base_address, buf1.GetSize(), false);
