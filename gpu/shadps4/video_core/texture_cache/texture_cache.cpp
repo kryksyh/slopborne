@@ -839,12 +839,19 @@ void TextureCache::RefreshImage(Image& image) {
         // had no reference, and the first CPU write anywhere in its page replaced the GPU's
         // contents with stale guest memory (a 1x1 exposure texture computed once: the
         // character creation preview went black after one frame).
-        const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address) + mip_offset;
-        const u64 mip_hash = XXH3_64bits(mip_addr, mip_size);
-        if (is_gpu_modified && !is_gpu_dirty && image.mip_hashes[m] == mip_hash) {
-            continue;
+        // Only for images the GPU writes or may write (small ones, targets, storage images): a
+        // streamed texture hashed here cost the GPU thread its whole size again on every upload.
+        const bool track = (is_gpu_modified && !is_gpu_dirty) || mip_size <= 64_KB ||
+                           image.usage.storage || image.usage.render_target ||
+                           image.usage.depth_target;
+        if (track) {
+            const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address) + mip_offset;
+            const u64 mip_hash = XXH3_64bits(mip_addr, mip_size);
+            if (is_gpu_modified && !is_gpu_dirty && image.mip_hashes[m] == mip_hash) {
+                continue;
+            }
+            image.mip_hashes[m] = mip_hash;
         }
-        image.mip_hashes[m] = mip_hash;
 
         const u32 extent_width = mip_pitch ? std::min(mip_pitch, width) : width;
         const u32 extent_height = mip_height ? std::min(mip_height, height) : height;
