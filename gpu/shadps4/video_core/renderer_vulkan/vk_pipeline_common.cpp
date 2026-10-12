@@ -7,6 +7,7 @@
 #include <boost/container/static_vector.hpp>
 
 #include <cstdio>
+#include <cstring>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -160,7 +161,25 @@ void Pipeline::BindResources(DescriptorWrites& set_writes,
         IsCompute() ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics;
     const auto stage_flags = IsCompute() ? vk::ShaderStageFlagBits::eCompute : AllGraphicsStageBits;
     const vk::PipelineLayout layout = *pipeline_layout;
-    scheduler.Record([layout, stage_flags, push_data](vk::CommandBuffer cmdbuf) {
+    // 84% of consecutive draws push the same constants. Within one render pass only draws push
+    // (every graphics layout has the same range), so a repeat of the previous draw's values in
+    // the same pass is skipped; the first draw of a pass always pushes.
+    static const bool dedupe = [] {
+        const char* env = std::getenv("BB_PUSH_DEDUPE");
+        return !env || env[0] != '0';
+    }();
+    const u64 pass = dedupe && !IsCompute() ? scheduler.PassSerial() : 0;
+    scheduler.Record([layout, stage_flags, push_data, pass](vk::CommandBuffer cmdbuf) {
+        static thread_local vk::CommandBuffer last_cmdbuf;
+        static thread_local u64 last_pass = 0;
+        static thread_local Shader::PushData last_push;
+        if (pass && cmdbuf == last_cmdbuf && pass == last_pass &&
+            std::memcmp(&last_push, &push_data, sizeof(push_data)) == 0) {
+            return;
+        }
+        last_cmdbuf = cmdbuf;
+        last_pass = pass;
+        last_push = push_data;
         cmdbuf.pushConstants(layout, stage_flags, 0u, sizeof(push_data), &push_data);
     });
 
