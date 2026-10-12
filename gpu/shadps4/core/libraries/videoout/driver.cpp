@@ -300,6 +300,14 @@ void VideoOutDriver::Flip(const Request& req) {
 
     // bbport: BB_FRAME_STATS=1 prints flip rate and frame time spread every 5 seconds.
     static const bool frame_stats = EmulatorSettingsImpl::Flag("BB_FRAME_STATS", false);
+    static const bool timing_reported = [] {
+        if (frame_stats) {
+            std::printf("Frame diagnostics: detailed operation timers %s (BB_DETAILED_TIMING)\n",
+                        BbStats::timing_enabled ? "enabled" : "disabled");
+        }
+        return true;
+    }();
+    (void)timing_reported;
     if (frame_stats) {
         using Clock = std::chrono::steady_clock;
         static Clock::time_point window_start = Clock::now(), last = window_start;
@@ -349,7 +357,7 @@ void VideoOutDriver::Flip(const Request& req) {
                                   BbStats::t_prepare_frame.load(), BbStats::t_frames_ahead.load(),
                                   BbStats::t_render_frame.load(), BbStats::t_frame_flush.load(),
                                   BbStats::t_frame_image.load()};
-        if (frame_ms > 40.0 && frames_seen) {
+        if (frame_ms > 40.0 && frames_seen && BbStats::timing_enabled) {
             std::printf("       draw recording thread busy %.1f ms (binding %.1f: buffers %.1f, "
                         "textures %.1f; buffer sync %.1f); command thread waited for it %.1f ms, "
                         "pipeline lookups %.1f ms; submissions %.1f, draw records %.1f, dispatch "
@@ -367,7 +375,7 @@ void VideoOutDriver::Flip(const Request& req) {
         for (int i = 0; i < 15; ++i) {
             last_split[i] = split_now[i];
         }
-        if (frame_ms > 40.0 && frames_seen) {
+        if (frame_ms > 40.0 && frames_seen && BbStats::timing_enabled) {
             std::printf("       GPU command thread idle (waiting for guest submissions) %.1f ms; "
                         "waiting for the GPU %.1f ms, recording %.1f ms, host copies %.1f ms, "
                         "copy threads %.1f ms\n",
@@ -421,7 +429,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         (sys_us - last_sys) / 1e3, static_cast<unsigned long long>(invol - last_invol),
                         static_cast<unsigned long long>(vol - last_vol));
         }
-        if (frame_ms > 40.0 && frames_seen) {
+        if (frame_ms > 40.0 && frames_seen && BbStats::timing_enabled) {
             std::printf("       ms in: resident %.1f, protect %.1f, image/view create %.1f, "
                         "image refresh %.1f, staging %.1f, waiting for host copies %.1f\n",
                         (t_now[0] - last_t[0]) / 1e6, (t_now[1] - last_t[1]) / 1e6,

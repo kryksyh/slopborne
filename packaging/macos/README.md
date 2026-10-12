@@ -328,6 +328,13 @@ GPU/guest mismatch can be legitimate for GPU-generated inputs or guest memory
 reused after a draw was prepared, so compare the staged bytes and the bad/good
 frames before attributing a coherence fault.
 
+`BB_FRAME_STATS=1 BB_DETAILED_TIMING=0` keeps frame-rate, pacing and work counters
+while disabling the RAII operation/wait timers. Use this to measure their overhead
+before interpreting a CPU profile. Detailed timing defaults to on when frame
+statistics are enabled; without frame statistics neither timer runs. Other
+diagnostics (including copy/fault timing and external profilers) can still affect
+performance. Logs identify the timer mode, and omit disabled operation timings.
+
 `BB_CAPTURE_DRAW_HASH=<hex VS or PS hash>` adds the exact push-constant bytes,
 resolved descriptor handles/ranges/layouts, and direct-draw/index arguments to
 matching draws in text frame captures. Unlike the normal first-four-draw buffer

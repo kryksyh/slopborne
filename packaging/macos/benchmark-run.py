@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 from process_metrics import ResourceMonitor
 
 p = argparse.ArgumentParser(description=__doc__)
@@ -22,10 +23,18 @@ p.add_argument('--seconds', type=float, default=45)
 p.add_argument('--idle-seconds', type=float, default=0)
 p.add_argument('--move-seconds', type=float, default=0)
 p.add_argument('--timeout', type=float, default=300)
+p.add_argument('--startup-stall-seconds', type=float, default=45,
+               help='Abort startup if the game log stops advancing; 0 disables this check')
 p.add_argument('--env', action='append', default=[], metavar='KEY=VALUE')
 p.add_argument('--stop-after', action='store_true')
 p.add_argument('--wait-for-exit', action='store_true', help='Keep the launcher attached after the benchmark')
+p.add_argument('--captures', choices=('all', 'none'), default='all',
+               help='Disable readback/PNG captures for FPS comparisons after visual validation')
+p.add_argument('--ab-masks', help='Comma-separated BB_TOGGLE_FILE masks for warmed in-process A/B')
+p.add_argument('--ab-seconds', type=float, default=30)
+p.add_argument('--ab-settle', type=float, default=10)
 a = p.parse_args()
+setup_started = time.monotonic()
 for f in [a.prepared/'boot-linked.bin', a.prepared/'content.bin', a.profile/'patches.bin', a.profile/'bbport.ini', a.game/'eboot.bin', a.binary]:
     if not f.is_file(): p.error('Missing '+str(f))
 run = a.out.resolve()/datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
@@ -44,6 +53,16 @@ for pair in a.env:
 Path(env['BB_GPU_USER_DIR']).mkdir(parents=True, exist_ok=True)
 # Automation controls are always unique to this run.
 env.update(BB_PAD_FILE=str(run/'pad.txt'), BB_FRAME_DUMP_SEQUENCE=str(run/'capture-sequence.txt'), BB_DUMP_DIR=str(run/'captures'))
+phase_args = []
+if a.ab_masks:
+    masks = [int(value, 0) for value in a.ab_masks.split(',')]
+    if any(mask < 0 or mask >= 1 << 64 for mask in masks):
+        p.error('A/B masks must be unsigned 64-bit values')
+    toggle_file = run/'toggles.txt'
+    toggle_file.write_text(str(masks[0])+'\n')
+    env['BB_TOGGLE_FILE'] = str(toggle_file)
+    phase_args = ['--ab-masks', a.ab_masks, '--ab-seconds', str(a.ab_seconds),
+                  '--ab-settle', str(a.ab_settle), '--toggle-file', str(toggle_file)]
 command = [str(a.binary.resolve()), str(a.prepared.resolve()/'boot-linked.bin'), '--content-profile',
            str(a.prepared.resolve()/'content.bin'), '--patches', str(a.profile.resolve()/'patches.bin'),
            '--app0', str(a.game.resolve()), '--user', str(run/'user'), '--timeout', '0']
@@ -57,12 +76,14 @@ command = [str(a.binary.resolve()), str(a.prepared.resolve()/'boot-linked.bin'),
 log = run/'startup.log'
 with log.open('xb') as stream:
     game = subprocess.Popen(command, env=env, stdout=stream, stderr=subprocess.STDOUT)
+setup_seconds = time.monotonic() - setup_started
+launch_started = time.monotonic()
 (run/'pid.txt').write_text(str(game.pid))
 print('Run:', run, 'PID:', game.pid, flush=True)
 with ResourceMonitor(game.pid, run):
     try:
         result = subprocess.run([sys.executable, str(Path(__file__).with_name('camera-benchmark.py')), str(run), str(log),
-                                 '--seconds', str(a.seconds), '--timeout', str(a.timeout), '--move-seconds', str(a.move_seconds), '--idle-seconds', str(a.idle_seconds)])
+                                 '--seconds', str(a.seconds), '--timeout', str(a.timeout), '--startup-stall-seconds', str(a.startup_stall_seconds), '--move-seconds', str(a.move_seconds), '--idle-seconds', str(a.idle_seconds), '--captures', a.captures, *phase_args])
     finally:
         (run/'pad.txt').write_text('')
         if a.stop_after and game.poll() is None:
@@ -73,6 +94,10 @@ with ResourceMonitor(game.pid, run):
     if a.wait_for_exit and not a.stop_after and game.poll() is None:
         print('Benchmark finished; game remains open. PID:', game.pid, flush=True)
         game.wait()
+(run/'phase-times.json').write_text(json.dumps({
+    'setup_seconds': setup_seconds, 'launch_to_finish_seconds': time.monotonic() - launch_started,
+    'captures': a.captures,
+}, indent=2)+'\n')
 if not a.stop_after and game.poll() not in (None, 0):
     failure = {'exit_code': game.returncode, 'time': datetime.datetime.now().isoformat(),
                'benchmark_exit_code': result.returncode, 'log': str(log)}

@@ -111,12 +111,18 @@ inline const bool enabled = [] {
     const char* env = std::getenv("BB_FRAME_STATS");
     return env && env[0] == '1';
 }();
+/// Keep frame rate/pacing counters while disabling per-operation clock reads for an
+/// uncontaminated performance comparison. Detailed timing remains on by default.
+inline const bool timing_enabled = [] {
+    const char* env = std::getenv("BB_DETAILED_TIMING");
+    return enabled && (!env || env[0] != '0');
+}();
 struct Timer {
     std::atomic<std::uint64_t>& total;
     std::chrono::steady_clock::time_point start =
-        enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        timing_enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     ~Timer() {
-        if (!enabled) {
+        if (!timing_enabled) {
             return;
         }
         total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -133,15 +139,7 @@ inline std::atomic<std::uint64_t> reduced_draws{0}, scene_draws{0};
 /// for host copies before a submission or fence, and for GPU ticks.
 inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, tick_wait_ns{0},
     copy_threads_wait_ns{0}, host_copy_waits{0};
-struct WaitTimer {
-    std::atomic<std::uint64_t>& total;
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    ~WaitTimer() {
-        total.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                            std::chrono::steady_clock::now() - start).count(),
-                        std::memory_order_relaxed);
-    }
-};
+using WaitTimer = Timer;
 /// GPU thread rusage, refreshed after each graphics submission.
 inline std::atomic<std::uint64_t> gpu_sys_us{0}, gpu_user_us{0}, gpu_invol_switches{0},
     gpu_vol_switches{0}, gpu_minor_faults{0};

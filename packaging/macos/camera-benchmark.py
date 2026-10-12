@@ -17,9 +17,17 @@ p.add_argument('directory', type=pathlib.Path)
 p.add_argument('log', type=pathlib.Path)
 p.add_argument('--seconds', type=float, default=45)
 p.add_argument('--timeout', type=float, default=240)
+p.add_argument('--startup-stall-seconds', type=float, default=45)
 p.add_argument('--idle-seconds', type=float, default=0, help='Monitor idle gameplay after the input sequence')
 p.add_argument('--move-seconds', type=float, default=0, help='Walk forward then backward for this many seconds each')
+p.add_argument('--captures', choices=('all', 'none'), default='all')
+p.add_argument('--ab-masks')
+p.add_argument('--ab-seconds', type=float, default=30)
+p.add_argument('--ab-settle', type=float, default=10)
+p.add_argument('--toggle-file', type=pathlib.Path)
 a = p.parse_args()
+if a.ab_masks and (not a.toggle_file or a.ab_seconds <= 0 or a.ab_settle < 5):
+    p.error('A/B requires a toggle file, positive phase duration and >=5s settling')
 pattern = re.compile(r'Frame stats: ([\d.]+) FPS, worst frame ([\d.]+) ms.*?; (\d+) shader/pipeline compiles.*?, (\d+) draws/frame')
 module = importlib.util.spec_from_file_location('game_control', pathlib.Path(__file__).with_name('game-control.py'))
 control = importlib.util.module_from_spec(module)
@@ -27,6 +35,18 @@ module.loader.exec_module(control)
 pad = a.directory/'pad.txt'
 neutral = 'lx=128 ly=128 rx=128 ry=128'
 started = time.monotonic()
+warmup_started = started
+warmup_seconds = None
+capture_seconds = 0.0
+phases = []
+
+def capture():
+    global capture_seconds
+    if a.captures == 'all':
+        begin = time.monotonic()
+        control.capture(a.directory)
+        capture_seconds += time.monotonic() - begin
+
 last_press = -100
 presses = 0
 warm = 0
@@ -35,10 +55,17 @@ samples = []
 baseline = 0
 completed = False
 error = None
+startup_log_size = -1
+startup_log_progress = time.monotonic()
 faults = ('STOP:', 'Host fault', 'VK_ERROR_DEVICE_LOST', 'Lost VkDevice', 'Device lost during', 'Caused GPU Hang', 'VK_ERROR_OUT_OF_DEVICE_MEMORY', 'GPU semaphore wait failed')
 try:
     while time.monotonic() - started < a.timeout:
         text = a.log.read_text(errors='replace')
+        if len(text) != startup_log_size:
+            startup_log_size = len(text)
+            startup_log_progress = time.monotonic()
+        elif a.startup_stall_seconds > 0 and time.monotonic() - startup_log_progress > a.startup_stall_seconds:
+            raise RuntimeError('No startup log progress for '+str(a.startup_stall_seconds)+' seconds')
         if any(fault in text for fault in faults):
             raise RuntimeError('Game faulted; see '+str(a.log))
         matches = list(pattern.finditer(text))
@@ -62,8 +89,49 @@ try:
         time.sleep(0.5)
     else:
         raise RuntimeError('No warm gameplay before timeout')
-    control.capture(a.directory)
+    warmup_seconds = time.monotonic() - warmup_started
+    capture()
     baseline = len(a.log.read_text(errors='replace'))
+    if a.ab_masks:
+        pad.write_text(neutral)
+        for mask in map(lambda value: int(value, 0), a.ab_masks.split(',')):
+            phase_start = len(a.log.read_text(errors='replace'))
+            a.toggle_file.write_text(str(mask)+'\n')
+            # The watcher only logs changes; adjacent identical masks need no ack.
+            if not phases or phases[-1]['mask'] != mask:
+                previous = a.log.read_text(errors='replace')[:phase_start]
+                changes = re.findall(r'Runtime: disabled optimizations mask=(\d+)', previous)
+                if not changes or int(changes[-1]) != mask:
+                    deadline = time.monotonic() + 5
+                    while f'Runtime: disabled optimizations mask={mask}\n' not in a.log.read_text(errors='replace')[phase_start:]:
+                        if time.monotonic() > deadline:
+                            raise RuntimeError('No acknowledgement for toggle mask '+str(mask))
+                        time.sleep(.1)
+            phase_started = time.monotonic()
+            sample_begin = None
+            last_progress = phase_started
+            previous_frame = -1
+            while time.monotonic() - phase_started < a.ab_settle + a.ab_seconds:
+                text = a.log.read_text(errors='replace')
+                if any(fault in text[phase_start:] for fault in faults):
+                    raise RuntimeError('Game faulted during A/B phase')
+                frame = text.rfind('Frame stats:')
+                if frame != previous_frame:
+                    previous_frame = frame
+                    last_progress = time.monotonic()
+                elif time.monotonic() - last_progress > 15:
+                    raise RuntimeError('No frame progress during A/B phase')
+                if sample_begin is None and time.monotonic() - phase_started >= a.ab_settle:
+                    sample_begin = len(text)
+                time.sleep(.25)
+            phase_text = a.log.read_text(errors='replace')[sample_begin:]
+            phase_samples = [{'fps':float(m[1]), 'worst_ms':float(m[2]),
+                              'compiles':int(m[3]), 'draws':int(m[4])}
+                             for m in pattern.finditer(phase_text)]
+            phase = {'mask':mask, 'samples':phase_samples, 'settle_seconds':a.ab_settle,
+                     'measured_seconds':a.ab_seconds}
+            phases.append(phase)
+            print('A/B phase:', json.dumps(phase), flush=True)
     print('Starting camera sweep', flush=True)
     started = time.monotonic()
     previous_axis = None
@@ -87,7 +155,7 @@ try:
                 raise RuntimeError('Game faulted during movement')
             time.sleep(0.5)
     pad.write_text(neutral)
-    control.capture(a.directory)
+    capture()
     if a.idle_seconds > 0:
         pad.write_text('')
         print('Monitoring idle gameplay for', a.idle_seconds, 'seconds', flush=True)
@@ -105,7 +173,7 @@ try:
             elif time.monotonic() - last_progress > 30:
                 raise RuntimeError('No renderer progress for 30 seconds after the input sequence')
             time.sleep(0.5)
-        control.capture(a.directory)
+        capture()
     completed = True
 except BaseException as exc:
     error = str(exc)
@@ -114,7 +182,9 @@ finally:
     pad.write_text('')
     text = a.log.read_text(errors='replace')[baseline:]
     samples = [{'fps':float(m[1]), 'worst_ms':float(m[2]), 'compiles':int(m[3]), 'draws':int(m[4])} for m in pattern.finditer(text)]
-    result = {'log':str(a.log.resolve()), 'seconds':a.seconds, 'samples':samples, 'completed':completed, 'error':error, 'move_seconds_each_direction':a.move_seconds, 'idle_seconds':a.idle_seconds}
+    result = {'log':str(a.log.resolve()), 'seconds':a.seconds, 'samples':samples, 'completed':completed, 'error':error, 'move_seconds_each_direction':a.move_seconds, 'idle_seconds':a.idle_seconds,
+              'warmup_seconds':warmup_seconds, 'capture_seconds':capture_seconds, 'captures':a.captures,
+              'phases':phases}
     target = a.directory/('benchmark-'+datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'.json')
     target.write_text(json.dumps(result, indent=2)+'\n')
     print(json.dumps(result), flush=True)
