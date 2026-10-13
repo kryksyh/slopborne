@@ -563,8 +563,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                         draw_regs.depth_control.depth_write_enable &&
                         depth_func != AmdGpu::CompareFunc::Always &&
                         depth_func != AmdGpu::CompareFunc::Never;
-    // A full-screen pass (composite, tonemap, post: one quad or rect into a large target)
-    // skipped for a frame shows its input instead of the picture: wait for its pipeline. A
+    // A full-screen pass (composite, tonemap, post: one quad or rect) skipped for a frame shows
+    // its input instead of the picture; into a small persistent texture (the blood mask on
+    // clothes) the missing pass stays until the game rewrites it: wait for its pipeline. A
     // tessellated or geometry draw counts patches or primitives, not vertices: not one.
     static const bool fullscreen_wait = [] {
         const char* env = std::getenv("BB_ASYNC_FULLSCREEN_WAIT");
@@ -574,8 +575,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         !sel.geometry && !sel.graphics_key.stage_hashes[u32(Shader::SwStage::TessellationControl)];
     if (!it->second->IsReady() && fullscreen_wait && !opaque && plain_vertices &&
         draw_regs.num_indices <= 6 &&
-        draw_regs.num_instances.NumInstances() <= 1 && draw_regs.color_buffers[0] &&
-        draw_regs.color_buffers[0].Pitch() >= 640) {
+        draw_regs.num_instances.NumInstances() <= 1 && draw_regs.color_buffers[0]) {
         ++async_compiler->stats.fullscreen_waits;
         BbStats::async_fullscreen_waits.fetch_add(1, std::memory_order_relaxed);
         it->second->Prioritize();
