@@ -168,6 +168,8 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -236,6 +238,11 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
 }
 
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    // bbport: an entry that returned early left its stages in `sel`; the next entry without
+    // that stage (a depth-only pipeline: no fragment shader) took it over (0xCydral b35a693).
+    sel.infos.fill(nullptr);
+    sel.modules.fill(nullptr);
+    sel.fetch_shader.reset();
     sel.graphics_key.Deserialize(ar);
 
     // bbport: motion-vector pipelines are never preloaded. Their vertex shader embeds session-
