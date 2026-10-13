@@ -450,6 +450,21 @@ void Menu() {
                "the scene size relative to the output: 4K Performance = 1920x1080. A size change "
                "resets the FSR history and may cause a short pause."));
     }
+    static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720"};
+    const int render_res = s.render_res;
+    ImGui::BeginDisabled(s.output_res != BbSettings::OutputDefault);
+    if (ImGui::BeginCombo(T("Render resolution"), render_sizes[render_res])) {
+        for (int i = 0; i < BbSettings::RenderResCount; ++i) {
+            if (ImGui::Selectable(render_sizes[i], i == render_res)) {
+                BbSettings::SelectRenderRes(i);
+                dirty = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    Hint(T("Scene size at 1080p output, patched at game start: the smaller sizes are much faster "
+           "and the upscaler (MetalFX on Apple GPUs) fills 1080p. Applies after a game restart."));
     static const char* live_modes[] = {T("Auto (by GPU)"), T("Off (faster)"), T("On")};
     int live = s.live_resolution + 1;
     if (ImGui::BeginCombo(T("Live resolution change"), live_modes[live])) {

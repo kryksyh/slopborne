@@ -95,6 +95,12 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
                          '854x480')
 
+    def test_menu_render_size_is_patched_even_with_live_resolution(self):
+        row = self.run_restarts(ini_extra='output_res=1920x1080\nrender_res=1600x900\n'
+                                          'live_resolution=1\n')[0]
+        self.assertEqual((row['BB_RENDER_RES'], row['BB_OUTPUT_RES'], row['BB_AUTO_RENDER_RES']),
+                         ('1600x900', '1920x1080', '1'))
+
     def test_live_resolution_without_sed_or_grep(self):
         # A missing sed ended run.sh (exit 127) before the game in the AppImage on NixOS.
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1,

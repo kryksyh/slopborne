@@ -86,6 +86,18 @@ class NativeUiTests(unittest.TestCase):
         # TAA is native-only and uses the live host targets.
         self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
 
+    def test_menu_render_size_at_1080p(self):
+        for size, expected in [('1600x900', (1600, 900)), ('1280x720', (1280, 720))]:
+            with self.subTest(size=size):
+                self.assertEqual(scaled_sizes({'output_res': '1920x1080', 'upscaler': 'metalfx',
+                                               'render_res': size}), (expected, (1920, 1080)))
+        self.assertIsNone(scaled_sizes({'render_res': '1920x1080'}))
+        self.assertIsNone(scaled_sizes({'render_res': '1280x720', 'upscaler': 'off'}))
+        self.assertIsNone(scaled_sizes({'render_res': '1280x720', 'upscaler': 'taa'}))
+        # Other outputs keep the preset's fraction.
+        self.assertEqual(scaled_sizes({'output_res': '1280x720', 'preset': '0', 'render_res': '1600x900'}),
+                         ((1280, 720), (1280, 720)))
+
 
 class DebugPatchTests(unittest.TestCase):
     def test_camera_patch_is_optional_and_compatible_with_fps_and_debug_menu(self):

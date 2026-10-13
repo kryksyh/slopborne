@@ -55,6 +55,12 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
+/// Scene sizes for the 1080p output (render_res): the reduced ones are patched at start
+/// (patches.py) and an upscaler fills 1080p.
+inline constexpr int RenderWidths[] = {1920, 1600, 1280};
+inline constexpr int RenderHeights[] = {1080, 900, 720};
+inline constexpr int RenderResCount = 3;
+inline constexpr int RenderNative = 0;
 
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
@@ -84,6 +90,9 @@ struct Values {
     std::atomic<bool> effects[EffectCount]{};
     std::atomic<int> model_lod{0}; ///< -2 highest .. 2 lowest, 0 the game's
     std::atomic<int> output_res{OutputDefault}; ///< index into OutputWidths
+    std::atomic<int> render_res{RenderNative}; ///< index into RenderWidths; on restart
+    /// The upscaler chosen before a reduced render_res, restored at native; -1 none.
+    std::atomic<int> native_upscaler{-1};
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{0};
@@ -106,6 +115,7 @@ struct Values {
     bool startup_effects[EffectCount]{};
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
+    int startup_render_res = RenderNative;
     int startup_live_resolution = 0;
     bool startup_async_pipelines = true;
 };
@@ -124,6 +134,9 @@ void ConfigureMetalFxSupport(bool available);
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
+/// Menu choice of render_res: a reduced size needs an upscaler (MetalFX where supported); the
+/// upscaler used before it comes back at native.
+void SelectRenderRes(int render_res);
 /// Writes the file (menu changes).
 void Save();
 

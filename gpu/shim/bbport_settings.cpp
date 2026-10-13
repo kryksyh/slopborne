@@ -66,6 +66,19 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_invert_jitter = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
+    } else if (key == "render_res") {
+        for (int r = 0; r < RenderResCount; ++r) {
+            if (value == std::to_string(RenderWidths[r]) + "x" + std::to_string(RenderHeights[r])) {
+                v.render_res = r;
+            }
+        }
+    } else if (key == "native_upscaler") {
+        v.native_upscaler = -1;
+        for (int u = 0; u < UpscalerCount; ++u) {
+            if (value == UpscalerName(u)) {
+                v.native_upscaler = u;
+            }
+        }
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -140,6 +153,7 @@ void Load() {
     }
     v.startup_async_pipelines = v.async_pipelines;
     v.startup_output_res = v.output_res;
+    v.startup_render_res = v.render_res;
     v.startup_live_resolution = v.live_resolution;
     v.startup_controller_layout = v.controller_layout;
     v.startup_controller_device = v.controller_device;
@@ -195,11 +209,37 @@ int RenderPreset() {
 
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
+    if (v.render_res != v.startup_render_res) {
+        return true;
+    }
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
     return FixedRenderSession() &&
-        (v.preset != v.startup_preset || v.output_res != v.startup_output_res ||
+        ((v.preset != v.startup_preset && v.render_res == RenderNative) ||
+         v.output_res != v.startup_output_res ||
          (v.upscaler == UpscalerOff) != (v.startup_upscaler == UpscalerOff) ||
          (v.upscaler == UpscalerTaa) != (v.startup_upscaler == UpscalerTaa));
+}
+
+void SelectRenderRes(int render_res) {
+    auto& v = Get();
+    if (render_res == v.render_res) {
+        return;
+    }
+    if (render_res == RenderNative) {
+        if (v.native_upscaler >= 0) {
+            v.upscaler = v.native_upscaler.load();
+        }
+        v.native_upscaler = -1;
+    } else {
+        if (v.render_res == RenderNative) {
+            v.native_upscaler = v.upscaler.load();
+        }
+        const int u = v.upscaler;
+        if (v.metalfx_supported || u == UpscalerOff || u == UpscalerTaa) {
+            v.upscaler = v.metalfx_supported ? UpscalerMetalFx : UpscalerFsr3;
+        }
+    }
+    v.render_res = render_res;
 }
 
 void Save() {
@@ -224,8 +264,12 @@ void Save() {
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
     }
-    std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\n", v.model_lod.load(),
-                 OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nrender_res=%dx%d\n", v.model_lod.load(),
+                 OutputWidths[v.output_res], OutputHeights[v.output_res],
+                 RenderWidths[v.render_res], RenderHeights[v.render_res]);
+    if (v.native_upscaler >= 0) {
+        std::fprintf(file, "native_upscaler=%s\n", UpscalerName(v.native_upscaler));
+    }
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

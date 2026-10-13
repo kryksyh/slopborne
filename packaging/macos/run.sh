@@ -8,6 +8,7 @@ export BB_DATA_DIR=${BB_DATA_DIR:-$PWD/out/macos/run-data}
 # Tested MoltenVK path: direct Metal bindings and retained command resources.
 export MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS=${MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS:-0}
 export MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES=${MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES:-1}
+export MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=${MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS:-2}
 game=${BB_GAME_DIR:-../CUSA03173}
 [[ -d $game ]] || { echo "Game directory not found: $game" >&2; exit 1; }
 game=$(realpath "$game")

@@ -77,6 +77,27 @@ int main() {
     setenv("BB_RENDER_RES", "", 1);
     assert(!FixedRenderSession() && !ResolutionNeedsRestart());
     unsetenv("BB_RENDER_RES");
+    // The upscaler used before a reduced render size comes back at native, across a restart.
+    s.render_res = RenderNative;
+    s.native_upscaler = -1;
+    s.metalfx_supported = true;
+    s.upscaler = UpscalerOff;
+    SelectRenderRes(1);
+    assert(s.render_res == 1 && s.upscaler == UpscalerMetalFx && s.native_upscaler == UpscalerOff);
+    SelectRenderRes(2);
+    assert(s.upscaler == UpscalerMetalFx && s.native_upscaler == UpscalerOff);
+    Save();
+    s.native_upscaler = -1;
+    s.upscaler = UpscalerFsr3;
+    Load();
+    assert(s.render_res == 2 && s.upscaler == UpscalerMetalFx && s.native_upscaler == UpscalerOff);
+    SelectRenderRes(RenderNative);
+    assert(s.upscaler == UpscalerOff && s.native_upscaler == -1);
+    // MetalFX chosen at native stays, also through a reduced size and back.
+    s.upscaler = UpscalerMetalFx;
+    SelectRenderRes(1);
+    SelectRenderRes(RenderNative);
+    assert(s.upscaler == UpscalerMetalFx && s.native_upscaler == -1);
     std::remove(path);
     std::puts("Upscaler support: saved choices and FSR 3.1 fallback PASS");
 }

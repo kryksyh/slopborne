@@ -129,11 +129,24 @@ def output_size(settings):
     return OUTPUT_SIZE
 
 
+RENDER_SIZES={'1600x900':(1600,900),'1280x720':(1280,720)}
+
+
+def menu_render_size(settings):
+    """The menu's reduced scene size for the 1080p output (render_res), or None. It is patched at
+    start whatever live_resolution says: host-target scaling misses most of the scene's cost."""
+    if output_size(settings)!=OUTPUT_SIZE or settings.get('upscaler','fsr3') in ('off','taa'):
+        return None
+    return RENDER_SIZES.get(settings.get('render_res',''))
+
+
 def scaled_sizes(settings):
     """(render, output) for an output other than 1080p (above it, or 720p for the Steam Deck):
     the game renders at output / preset scale (or at the output size without upscaler) and the
-    upscaler fills the output. None at 1080p and for TAA (native, live host targets only)."""
+    upscaler fills the output. At 1080p the menu's render_res size, else None; None for TAA
+    (native, live host targets only)."""
     out=output_size(settings)
+    if menu_render_size(settings): return menu_render_size(settings),out
     if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
     scale=1.0
     if settings.get('upscaler','fsr3')!='off':
@@ -280,8 +293,11 @@ def main():
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
     a=p.parse_args()
     if a.print_scaled:
-        sizes=scaled_sizes(read_settings(a.settings))
-        if sizes: print(f'{sizes[0][0]}x{sizes[0][1]} {sizes[1][0]}x{sizes[1][1]}')
+        settings=read_settings(a.settings)
+        sizes=scaled_sizes(settings)
+        # "fixed": the launcher patches this size even when live_resolution is on.
+        if sizes: print(f'{sizes[0][0]}x{sizes[0][1]} {sizes[1][0]}x{sizes[1][1]}'
+                        +(' fixed' if menu_render_size(settings) else ''))
         return
     if a.print_preset_size:
         settings=read_settings(a.settings)

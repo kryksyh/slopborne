@@ -280,6 +280,8 @@ def game_environment(config, game):
     # Tested MoltenVK path: direct Metal bindings and retained command resources.
     env.setdefault('MVK_CONFIG_USE_METAL_ARGUMENT_BUFFERS', '0')
     env.setdefault('MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES', '1')
+    # Metal encoding on the recording thread instead of inside vkQueueSubmit on the draw thread.
+    env.setdefault('MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS', '2')
     # Frame-time game timing with an even cap: 30 FPS keeps 33.3 ms pacing on Apple Silicon.
     env.setdefault('BB_FPS', 'uncap')
     env.setdefault('BB_FPS_LIMIT', str(config['fps_limit']))

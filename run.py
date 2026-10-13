@@ -229,12 +229,14 @@ def main():
                 env.pop(key, None)
         fps = env.get('BB_FPS', 'uncap') if patched else '30'
         scaled_render = scaled_output = None
+        fixed = False
         if not env.get('BB_RENDER_RES'):
             printed = run_script('patches.py', '--print-scaled', '--settings', config, capture=True).split()
-            if len(printed) == 2:
-                scaled_render, scaled_output = printed
+            if len(printed) in (2, 3):
+                scaled_render, scaled_output = printed[:2]
+                fixed = len(printed) == 3
         live = '0'
-        if scaled_output:
+        if scaled_output and not (fixed and patched):
             live = env.get('BB_LIVE_RES') or ini_value(config, 'live_resolution') or '0'
             if live == 'auto':
                 caps = probe.parent / ('bb-gpu-capabilities' + EXE)
