@@ -160,6 +160,13 @@ add_library(bbgpu ${BBGPU_KIND} ${VIDEO_CORE} ${RECOMPILER} ${COMMON} ${SHIM_SOU
     shadps4/core/libraries/kernel/equeue.cpp ${AVPLAYER}
     shadps4/core/libraries/videodec/video_utils.cpp)
 add_dependencies(bbgpu host_shaders)
+if (APPLE)
+    enable_language(OBJCXX)
+    target_sources(bbgpu PRIVATE shadps4/video_core/renderer_vulkan/vk_metalfx.mm)
+    set_source_files_properties(shadps4/video_core/renderer_vulkan/vk_metalfx.mm
+        PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+    target_link_libraries(bbgpu PUBLIC "-framework Metal" "-framework MetalFX" "-framework Foundation")
+endif()
 # bbport co-op: PS4 network and PSN libraries with the shadNet client, from shadp2p
 # (github.com/Wozzardman/shadp2p, GPL-2.0), for private Bloodborne co-op servers.
 find_package(Protobuf CONFIG REQUIRED)

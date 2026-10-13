@@ -121,6 +121,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
+        {"BB_SHOW_FPS", "show_fps"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -168,6 +169,15 @@ void ConfigureDlssSupport(bool available, const char* problem) {
     if (v.upscaler == UpscalerDlss && !available) {
         std::printf("Upscaler: DLSS unavailable (%s); falling back to FSR 3.1\n",
                     kept.empty() ? "bbport_dlss.dll or nvngx_dlss.dll missing" : kept.c_str());
+        v.upscaler = UpscalerFsr3;
+    }
+}
+
+void ConfigureMetalFxSupport(bool available) {
+    auto& v = Get();
+    v.metalfx_supported = available;
+    if (v.upscaler == UpscalerMetalFx && !available) {
+        std::printf("Upscaler: MetalFX unavailable; falling back to FSR 3.1\n");
         v.upscaler = UpscalerFsr3;
     }
 }
@@ -239,7 +249,7 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss", "metalfx"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
 }
 

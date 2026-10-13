@@ -473,6 +473,11 @@ public:
                image_2d_view_of_3d_features.sampler2DViewOf3D;
     }
 
+    /// VK_EXT_metal_objects (MoltenVK): Metal textures and events behind Vulkan objects.
+    bool IsMetalObjectsSupported() const {
+        return metal_objects;
+    }
+
     /// Returns whether VK_EXT_image_view_min_lod is supported.
     bool IsImageViewMinLodSupported() const {
         return image_view_min_lod;
@@ -571,6 +576,7 @@ private:
     bool maintenance_8{};
     bool attachment_feedback_loop{};
     bool image_2d_view_of_3d{};
+    bool metal_objects{};
     bool image_view_min_lod{};
     bool shader_clock{};
     bool compute_shader_derivatives{};

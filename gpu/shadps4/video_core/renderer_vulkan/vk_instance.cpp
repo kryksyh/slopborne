@@ -289,6 +289,7 @@ bool Instance::CreateDevice() {
     add_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
 
     // Optional
+    metal_objects = add_extension("VK_EXT_metal_objects");
     maintenance_5 = add_extension(VK_KHR_MAINTENANCE_5_EXTENSION_NAME);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     attachment_feedback_loop = add_extension(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);

@@ -608,13 +608,17 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
+    if (next_submit_wait) {
+        info.AddWait(next_submit_wait, next_submit_wait_tick);
+        next_submit_wait = vk::Semaphore{};
+    }
 
-    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
-        vk::PipelineStageFlagBits::eAllCommands,
-        // Presentation consumes the completed frame in a transfer blit, before
-        // color attachment output. Waiting only at color output permits that
-        // transfer to read an image whose rendering has not completed.
-        vk::PipelineStageFlagBits::eAllCommands,
+    // Presentation consumes the completed frame in a transfer blit, before color attachment
+    // output. Waiting only at color output permits that transfer to read an image whose
+    // rendering has not completed.
+    static constexpr std::array<vk::PipelineStageFlags, 4> wait_stage_masks = {
+        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
+        vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eAllCommands,
     };
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {

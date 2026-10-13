@@ -687,6 +687,13 @@ public:
     /// recording into a submitted buffer crashes AMD's driver).
     void WaitSubmitted();
 
+    /// bbport: the next submission waits for `semaphore` to reach `tick` (work the GPU runs
+    /// outside Vulkan in between, e.g. MetalFX).
+    void WaitBeforeNextSubmit(vk::Semaphore semaphore, u64 tick) {
+        next_submit_wait = semaphore;
+        next_submit_wait_tick = tick;
+    }
+
     /// Waits for the given tick to trigger on the GPU.
     void Wait(u64 tick);
 
@@ -938,6 +945,8 @@ public:
     }
 
     static std::mutex submit_mutex;
+    vk::Semaphore next_submit_wait;
+    u64 next_submit_wait_tick{};
 
 private:
     void AllocateWorkerCommandBuffers();
