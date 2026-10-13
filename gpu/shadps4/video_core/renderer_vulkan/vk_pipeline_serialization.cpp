@@ -366,6 +366,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
     if (new_program) {
         module = CompileSPV(spv, instance.GetDevice());
+        KeepSpirv(module, spv);
         it_pgm.value() = std::move(program);
     } else {
         const auto& it = std::ranges::find(it_pgm.value()->modules, spec, &Program::Module::spec);
@@ -384,6 +385,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             module = it->module;
         } else {
             module = CompileSPV(spv, instance.GetDevice());
+        KeepSpirv(module, spv);
         }
     }
     it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);

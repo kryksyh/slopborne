@@ -97,6 +97,8 @@ struct PipelineSelection {
     bool motion = false;
     const GeometryReplayStages* geometry{};
     bool allow_geometry = false;
+    bool allow_tess_fusion = false; ///< non-indexed, single instance (vk_tess_fusion.h)
+    u32 tess_fused_vertices = 0;    ///< per patch when the selection is fused
     DrawIndirectParams draw_indirect_params{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
 };
@@ -131,8 +133,14 @@ public:
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
 
+    /// Before GetGraphicsPipeline: whether the draw may replace quad tessellation.
+    void AllowTessFusion(bool allow) noexcept {
+        sel.allow_tess_fusion = allow;
+    }
+
     /// While the pipeline compiles in the background: itself for an opaque draw once its
     /// stand-in is ready (GraphicsPipeline::Handle), else nullptr and the draw is dropped.
+
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {},
                                                 const PreparedDraw* prepared = nullptr,
                                                 bool allow_geometry = true);
@@ -211,6 +219,18 @@ private:
     /// Declared after the pipelines: destroyed (its workers joined) before them.
     std::unique_ptr<AsyncCompiler> async_compiler;
     u64 skipped_draws{}; ///< draws skipped while their pipeline compiled
+    /// bbport: SPIR-V of the stage modules, and the vertex shaders that replace quad
+    /// tessellation (vk_tess_fusion.h; null: not fusable), by local, hull and domain module.
+    std::mutex module_spirv_mutex;
+    std::unordered_map<VkShaderModule, std::vector<u32>> module_spirv;
+    struct FusedModule {
+        vk::ShaderModule module;
+        u32 vertices{};
+    };
+    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule>, FusedModule>
+        fused_modules;
+    void KeepSpirv(vk::ShaderModule module, std::span<const u32> spv);
+    bool FuseTessellation(PipelineSelection& sel);
     PipelineSelection sel{}; ///< GPU thread selection state
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start

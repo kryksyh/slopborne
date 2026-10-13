@@ -100,7 +100,7 @@ public:
                      std::optional<const Shader::Gcn::FetchShaderData> fetch_shader,
                      std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
                      bool preloading, const GeometryReplayStages* geometry = nullptr,
-                     AsyncCompiler* async = nullptr);
+                     AsyncCompiler* async = nullptr, u32 tess_fused_vertices = 0);
     ~GraphicsPipeline();
 
     /// bbport: while the pipeline compiles in the background, opaque draws use a stand-in with
@@ -122,6 +122,11 @@ public:
     }
 
     const GeometryReplayStages* Geometry() const noexcept { return geometry; }
+
+    /// bbport: quad tessellation drawn by one vertex shader (vk_tess_fusion.h): the hull and
+    /// domain stages' infos bind their resources, there is no hull or domain shader stage.
+    /// Vertices drawn per patch, 0 when not fused.
+    u32 TessFusedVertices() const noexcept { return tess_fused; }
 
     const GraphicsPipelineKey& GetGraphicsKey() const {
         return key;
@@ -154,6 +159,7 @@ private:
 
 private:
     const GeometryReplayStages* geometry{};
+    u32 tess_fused{};
     GraphicsPipelineKey key;
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader{};
 };

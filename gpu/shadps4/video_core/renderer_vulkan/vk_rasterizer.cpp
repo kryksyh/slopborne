@@ -941,6 +941,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
             return;
         }
     }
+    pipeline_cache.AllowTessFusion(!is_indexed && Regs().num_instances.NumInstances() == 1);
     const GraphicsPipeline* pipeline = [&] {
         BbStats::Timer timer{BbStats::t_pipeline};
         return pipeline_cache.GetGraphicsPipeline({}, prepared);
@@ -1194,10 +1195,17 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
 
     const vk::Pipeline handle = pipeline->Handle();
     const auto* geometry = pipeline->Geometry();
-    const u32 num_indices = geometry ? (geometry->max_vertices - 2) * 3 : regs.num_indices;
-    const u32 num_instances = geometry ? geometry_points : regs.num_instances.NumInstances();
-    const u32 first_vertex = geometry ? 0 : vertex_offset;
-    const u32 first_instance = geometry ? 0 : instance_offset;
+    // A fused quad tessellation (vk_tess_fusion.h): the pattern's triangles per point, the
+    // point's vertex index is gl_InstanceIndex.
+    const u32 fused = pipeline->TessFusedVertices();
+    const u32 num_indices = geometry ? (geometry->max_vertices - 2) * 3
+                            : fused  ? fused
+                                     : regs.num_indices;
+    const u32 num_instances = geometry ? geometry_points
+                              : fused  ? regs.num_indices
+                                       : regs.num_instances.NumInstances();
+    const u32 first_vertex = geometry || fused ? 0 : vertex_offset;
+    const u32 first_instance = geometry ? 0 : fused ? vertex_offset : instance_offset;
     const vk::Buffer replay_args = geometry && geometry_gpu_arguments
                                        ? geometry_indirect.buffer->Handle() : vk::Buffer{};
     const u64 replay_args_offset = geometry_indirect.offset + 4 * sizeof(u32);
@@ -1320,6 +1328,7 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         .vertex_sgpr_offset = vertex_sgpr_offset,
         .instance_sgpr_offset = instance_sgpr_offset,
     };
+    pipeline_cache.AllowTessFusion(false);
     const GraphicsPipeline* pipeline =
         pipeline_cache.GetGraphicsPipeline(params, nullptr, geometry_candidate);
     if (!pipeline) {

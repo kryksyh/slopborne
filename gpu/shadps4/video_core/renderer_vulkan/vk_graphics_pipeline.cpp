@@ -65,8 +65,9 @@ GraphicsPipeline::GraphicsPipeline(
     std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader_,
     std::span<const vk::ShaderModule> modules, SerializationSupport& sdata, bool preloading,
-    const GeometryReplayStages* geometry_, AsyncCompiler* async)
-    : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, geometry{geometry_}, key{key_},
+    const GeometryReplayStages* geometry_, AsyncCompiler* async, u32 tess_fused_vertices)
+    : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, geometry{geometry_},
+      tess_fused{tess_fused_vertices}, key{key_},
       fetch_shader{std::move(fetch_shader_)} {
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
@@ -223,7 +224,7 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
     stage = u32(Shader::SwStage::TessellationControl);
-    if (infos[stage]) {
+    if (infos[stage] && !tess_fused) {
         ci->shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eTessellationControl,
             .module = modules[stage],
@@ -242,7 +243,7 @@ GraphicsPipeline::GraphicsPipeline(
         });
     }
     stage = u32(Shader::SwStage::TessellationEval);
-    if (infos[stage]) {
+    if (infos[stage] && !tess_fused) {
         ci->shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eTessellationEvaluation,
             .module = modules[stage],
@@ -616,7 +617,11 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
         if (!stage) {
             continue;
         }
-        const auto stage_bit = LogicalStageToStageBit[u32(stage->sw_stage)];
+        const bool tess_stage = stage->sw_stage == Shader::SwStage::TessellationEval ||
+                                stage->sw_stage == Shader::SwStage::TessellationControl;
+        const auto stage_bit = tess_fused && tess_stage
+                                   ? vk::ShaderStageFlagBits::eVertex
+                                   : LogicalStageToStageBit[u32(stage->sw_stage)];
         for (const auto& buffer : stage->buffers) {
             const auto sharp =
                 preloading ? AmdGpu::Buffer{}

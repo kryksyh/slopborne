@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "video_core/renderer_vulkan/vk_tess_fusion.h"
 
 namespace Vulkan {
 
@@ -520,9 +521,11 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
             sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry,
-            async_compiler.get());
+            async_compiler.get(), sel.tess_fused_vertices);
 
-        if (!sel.geometry) RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
+        if (!sel.geometry && !sel.tess_fused_vertices) {
+            RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
+        }
         ++num_new_pipelines;
 
         if (EmulatorSettings.IsShaderCollect()) {
@@ -570,7 +573,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         GraphicsPipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<GraphicsPipeline>(
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
-            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry);
+            sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry, nullptr,
+            sel.tess_fused_vertices);
         sel.fetch_shader.reset();
     }
     return it->second.get();
@@ -935,6 +939,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     auto& key = sel.graphics_key;
     sel.fetch_shader = std::nullopt;
     sel.geometry = nullptr;
+    sel.tess_fused_vertices = 0;
 
     Shader::Backend::Bindings binding{};
     const auto bind_stage = [&](HwStage stage_in, SwStage stage_out) -> bool {
@@ -1018,6 +1023,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         if (!bind_stage(HwStage::Local, SwStage::Vertex)) {
             return false;
         }
+        FuseTessellation(sel);
         break;
     case AmdGpu::ShaderStageEnable::VgtStages::LsHsEsGs:
         if (!instance.IsTessellationSupported()) {
@@ -1080,6 +1086,70 @@ bool PipelineCache::RefreshComputeKey() {
     return true;
 }
 
+void PipelineCache::KeepSpirv(vk::ShaderModule module, std::span<const u32> spv) {
+    std::scoped_lock lock{module_spirv_mutex};
+    module_spirv.try_emplace(static_cast<VkShaderModule>(module), spv.begin(), spv.end());
+}
+
+bool PipelineCache::FuseTessellation(PipelineSelection& sel) {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_TESS_FUSION");
+        return env && env[0] == '1';
+    }();
+    constexpr u32 Hull = u32(SwStage::TessellationControl), Domain = u32(SwStage::TessellationEval),
+                  Local = u32(SwStage::Vertex);
+    const auto& regs = *sel.regs;
+    if (!enabled || !sel.allow_tess_fusion || sel.worker ||
+        regs.ls_hs_config.hs_input_control_points != 1 ||
+        regs.tess_config.type != AmdGpu::TessellationType::Quad ||
+        !sel.runtime_infos[Hull].sw.tcs.IsPassthrough()) {
+        return false;
+    }
+    const auto modules = std::tuple{static_cast<VkShaderModule>(sel.modules[Local]),
+                                    static_cast<VkShaderModule>(sel.modules[Hull]),
+                                    static_cast<VkShaderModule>(sel.modules[Domain])};
+    FusedModule fused;
+    {
+        std::scoped_lock lock{module_spirv_mutex};
+        auto [it, is_new] = fused_modules.try_emplace(modules);
+        if (is_new) {
+            const auto local = module_spirv.find(std::get<0>(modules));
+            const auto hull = module_spirv.find(std::get<1>(modules));
+            const auto domain = module_spirv.find(std::get<2>(modules));
+            if (local != module_spirv.end() && hull != module_spirv.end() &&
+                domain != module_spirv.end()) {
+                if (const auto spv = FuseQuadTessellation(local->second, hull->second,
+                                                          domain->second)) {
+                    it->second = {CompileSPV(spv->spirv, instance.GetDevice()), spv->vertices};
+                }
+            }
+            if (std::getenv("BB_TESS_FUSE_LOG")) {
+                std::printf("Tessellation fusion: local %#llx hull %#llx domain %#llx: %u vertices\n",
+                            static_cast<unsigned long long>(sel.infos[Local]->pgm_hash),
+                            static_cast<unsigned long long>(sel.infos[Hull]->pgm_hash),
+                            static_cast<unsigned long long>(sel.infos[Domain]->pgm_hash),
+                            it->second.vertices);
+            }
+        }
+        fused = it->second;
+    }
+    if (!fused.module) {
+        return false;
+    }
+    // One vertex shader drawing the pattern per patch: no hull or domain stage. Their infos stay:
+    // the shaders' binding numbers count the hull stage's resources first
+    // (GraphicsPipeline::TessFusedVertices).
+    auto& key = sel.graphics_key;
+    key.stage_hashes[Local] = key.stage_hashes[Local] * 31 + key.stage_hashes[Domain] + 0x7e55;
+    key.patch_control_points = 0;
+    key.prim_type = AmdGpu::PrimitiveType::TriangleList;
+    sel.modules[Hull] = nullptr;
+    sel.modules[Domain] = nullptr;
+    sel.modules[Local] = fused.module;
+    sel.tess_fused_vertices = fused.vertices;
+    return true;
+}
+
 vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::RuntimeInfo& runtime_info,
                                               const std::span<const u32>& code, size_t perm_idx,
                                               Shader::Backend::Bindings& binding) {
@@ -1102,6 +1172,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
     } else {
         module = CompileSPV(spv, instance.GetDevice());
     }
+    KeepSpirv(module, is_patched ? std::span<const u32>{*patch} : std::span<const u32>{spv});
 
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
 
