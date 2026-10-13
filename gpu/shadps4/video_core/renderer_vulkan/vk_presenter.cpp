@@ -353,6 +353,102 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     });
 }
 
+// bbport: BB_FLASH_LOG=1: a 16x16 grid of texels of every presented frame, checked once the GPU
+// is done with it (no wait). A frame brighter, darker or flatter than both neighbours is printed
+// with the async pipeline counters (draws skipped or waiting while their pipeline compiled).
+static void FlashSample(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
+                        vk::Image image, vk::Format format, u32 w, u32 h) {
+    constexpr u32 Grid = 16;
+    const bool ten_bit = format == vk::Format::eA2B10G10R10UnormPack32 ||
+                         format == vk::Format::eA2R10G10B10UnormPack32;
+    const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                                       .size = Grid * Grid * 4,
+                                       .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    const VmaAllocationCreateInfo alloc_ci{
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST};
+    VkBuffer buffer{};
+    VmaAllocation allocation{};
+    VmaAllocationInfo info{};
+    if (vmaCreateBuffer(instance.GetAllocator(), &buffer_ci, &alloc_ci, &buffer, &allocation,
+                        &info) != VK_SUCCESS) {
+        return;
+    }
+    std::array<vk::BufferImageCopy, Grid * Grid> regions;
+    for (u32 y = 0; y < Grid; ++y) {
+        for (u32 x = 0; x < Grid; ++x) {
+            regions[y * Grid + x] = vk::BufferImageCopy{
+                .bufferOffset = (y * Grid + x) * 4,
+                .imageSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .imageOffset = {s32((2 * x + 1) * w / (2 * Grid)), s32((2 * y + 1) * h / (2 * Grid)), 0},
+                .imageExtent = {1, 1, 1}};
+        }
+    }
+    cmdbuf.copyImageToBuffer(image, vk::ImageLayout::eGeneral, buffer, regions);
+    struct Sample {
+        double luma, spread, rgb[3];
+        u64 skipped, stand_in, waits;
+    };
+    const Sample counters{.skipped = BbStats::async_skipped.load(std::memory_order_relaxed),
+                          .stand_in = BbStats::async_stand_in.load(std::memory_order_relaxed),
+                          .waits = BbStats::async_fullscreen_waits.load(std::memory_order_relaxed)};
+    scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation, info,
+                                      ten_bit, counters] {
+        vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
+        const auto* texels = static_cast<const u32*>(info.pMappedData);
+        Sample s = counters;
+        double sum_sq = 0.0;
+        for (u32 i = 0; i < Grid * Grid; ++i) {
+            const u32 t = texels[i];
+            const u32 bits = ten_bit ? 10 : 8;
+            const double scale = double((1u << bits) - 1);
+            double luma = 0.0;
+            for (u32 k = 0; k < 3; ++k) {
+                const double c = double((t >> (k * bits)) & ((1u << bits) - 1)) / scale;
+                s.rgb[k] += c / (Grid * Grid); // channel order does not matter for brightness
+                luma += c / 3.0;
+            }
+            s.luma += luma / (Grid * Grid);
+            sum_sq += luma * luma / (Grid * Grid);
+        }
+        vmaDestroyBuffer(allocator, buffer, allocation);
+        s.spread = std::sqrt(std::max(0.0, sum_sq - s.luma * s.luma));
+        static std::array<Sample, 3> last{};
+        static u64 frames = 0, flashes = 0;
+        if (frames == 0) {
+            std::printf("Flash log: on (16x16 samples of each presented frame)\n");
+        }
+        last = {last[1], last[2], s};
+        if (++frames < 3) {
+            return;
+        }
+        const Sample& prev = last[0];
+        const Sample& mid = last[1];
+        const Sample& next = last[2];
+        constexpr double Jump = 0.08;
+        const bool brighter = mid.luma - prev.luma > Jump && mid.luma - next.luma > Jump;
+        const bool darker = prev.luma - mid.luma > Jump && next.luma - mid.luma > Jump;
+        const double neighbour_spread = std::min(prev.spread, next.spread);
+        const bool flat = neighbour_spread > 0.03 && mid.spread < 0.35 * neighbour_spread;
+        if (!brighter && !darker && !flat) {
+            return;
+        }
+        std::printf("Flash: presented frame %llu (#%llu) %s: mean %.3f (%.2f %.2f %.2f) spread %.3f; "
+                    "neighbours mean %.3f/%.3f spread %.3f/%.3f; async skipped %llu (+%llu), "
+                    "stand-in %llu (+%llu), full-screen waits %llu (+%llu)\n",
+                    static_cast<unsigned long long>(frames - 1),
+                    static_cast<unsigned long long>(++flashes),
+                    brighter ? "brighter" : darker ? "darker" : "flat", mid.luma, mid.rgb[0],
+                    mid.rgb[1], mid.rgb[2], mid.spread, prev.luma, next.luma, prev.spread,
+                    next.spread, static_cast<unsigned long long>(mid.skipped),
+                    static_cast<unsigned long long>(mid.skipped - prev.skipped),
+                    static_cast<unsigned long long>(mid.stand_in),
+                    static_cast<unsigned long long>(mid.stand_in - prev.stand_in),
+                    static_cast<unsigned long long>(mid.waits),
+                    static_cast<unsigned long long>(mid.waits - prev.waits));
+    });
+}
+
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
     BbStats::Timer stall_timer{BbStats::t_prepare_frame};
@@ -535,6 +631,19 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
                 frame->width, frame->height, "output", frame_dump_index);
         ++frame_dump_index;
+    }
+    static const bool flash_log = [] {
+        const char* env = std::getenv("BB_FLASH_LOG");
+        return env && env[0] == '1';
+    }();
+    if (flash_log) {
+        const vk::MemoryBarrier2 done{.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                                      .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                                      .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                                      .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &done});
+        FlashSample(instance, draw_scheduler, cmdbuf, frame->image,
+                    swapchain.GetSurfaceFormat().format, frame->width, frame->height);
     }
 
     // Flush frame creation commands.

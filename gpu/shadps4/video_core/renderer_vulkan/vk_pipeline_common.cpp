@@ -101,7 +101,7 @@ void AsyncCompiler::MaybeReport() {
         return;
     }
     const u64 total = stats.stand_in_draws + stats.skipped_transparent +
-                      stats.skipped_no_stand_in + stats.skipped_pending;
+                      stats.skipped_no_stand_in + stats.skipped_pending + stats.fullscreen_waits;
     if (total == last_report_total) {
         return;
     }
@@ -116,7 +116,7 @@ void AsyncCompiler::MaybeReport() {
         return count ? double(sum) / double(count) : 0.0;
     };
     std::printf("Async pipelines: %llu stand-in draws (%llu textured, %llu shared); skipped %llu transparent, "
-                "%llu without stand-in, %llu stand-in pending; stand-in after %.0f ms avg, %llu max "
+                "%llu without stand-in, %llu stand-in pending; %llu full-screen waits; stand-in after %.0f ms avg, %llu max "
                 "(%llu); ready after %.0f ms avg, %llu max (%llu); %zu compiles queued\n",
                 static_cast<unsigned long long>(stats.stand_in_draws),
                 static_cast<unsigned long long>(stats.textured_draws),
@@ -124,6 +124,7 @@ void AsyncCompiler::MaybeReport() {
                 static_cast<unsigned long long>(stats.skipped_transparent),
                 static_cast<unsigned long long>(stats.skipped_no_stand_in),
                 static_cast<unsigned long long>(stats.skipped_pending),
+                static_cast<unsigned long long>(stats.fullscreen_waits),
                 avg(stats.stand_in_ms, stats.stand_ins),
                 static_cast<unsigned long long>(stats.stand_in_max_ms),
                 static_cast<unsigned long long>(stats.stand_ins), avg(stats.ready_ms, stats.readies),

@@ -135,6 +135,9 @@ struct Timer {
 inline std::atomic<std::uint64_t> gpu_idle_ns{0};
 /// Draws recorded into the reduced scene targets, and draws after the scene started.
 inline std::atomic<std::uint64_t> reduced_draws{0}, scene_draws{0};
+/// Draws whose pipeline was still compiling: skipped, drawn with a stand-in, or full-screen
+/// passes that waited for it (BB_FLASH_LOG prints them next to a flash frame).
+inline std::atomic<std::uint64_t> async_skipped{0}, async_stand_in{0}, async_fullscreen_waits{0};
 /// Wall time spent blocked in the scheduler (ns): waiting for the recording thread to drain,
 /// for host copies before a submission or fence, and for GPU ticks.
 inline std::atomic<std::uint64_t> sync_recording_ns{0}, host_copies_wait_ns{0}, tick_wait_ns{0},

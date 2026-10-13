@@ -61,7 +61,7 @@ public:
     /// and to be ready (ms after the pipeline was queued).
     struct Stats {
         std::atomic<u64> stand_in_draws{}, textured_draws{}, shared_draws{}, skipped_transparent{},
-            skipped_no_stand_in{}, skipped_pending{};
+            skipped_no_stand_in{}, skipped_pending{}, fullscreen_waits{};
         std::atomic<u64> stand_ins{}, stand_in_ms{}, stand_in_max_ms{}, readies{}, ready_ms{},
             ready_max_ms{};
         void NoteStandIn(u64 ms) {

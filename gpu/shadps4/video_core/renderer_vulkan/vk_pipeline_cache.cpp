@@ -562,10 +562,30 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                         draw_regs.depth_control.depth_write_enable &&
                         depth_func != AmdGpu::CompareFunc::Always &&
                         depth_func != AmdGpu::CompareFunc::Never;
+    // A full-screen pass (composite, tonemap, post: one quad or rect into a large target)
+    // skipped for a frame shows its input instead of the picture: wait for its pipeline. A
+    // tessellated or geometry draw counts patches or primitives, not vertices: not one.
+    static const bool fullscreen_wait = [] {
+        const char* env = std::getenv("BB_ASYNC_FULLSCREEN_WAIT");
+        return !env || env[0] != '0';
+    }();
+    const bool plain_vertices =
+        !sel.geometry && !sel.graphics_key.stage_hashes[u32(Shader::SwStage::TessellationControl)];
+    if (!it->second->IsReady() && fullscreen_wait && !opaque && plain_vertices &&
+        draw_regs.num_indices <= 6 &&
+        draw_regs.num_instances.NumInstances() <= 1 && draw_regs.color_buffers[0] &&
+        draw_regs.color_buffers[0].Pitch() >= 640) {
+        ++async_compiler->stats.fullscreen_waits;
+        BbStats::async_fullscreen_waits.fetch_add(1, std::memory_order_relaxed);
+        while (!it->second->IsReady()) {
+            std::this_thread::yield();
+        }
+    }
     if (!it->second->IsReady()) {
         const auto& pipeline = *it->second;
         auto& stats = async_compiler->stats;
         if (pipeline.AnyStandInReady() && opaque) {
+            BbStats::async_stand_in.fetch_add(1, std::memory_order_relaxed);
             ++stats.stand_in_draws;
             if (pipeline.StandInReady()) {
                 stats.textured_draws += pipeline.StandInTextured();
@@ -575,6 +595,22 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             return it->second.get();
         }
         ++skipped_draws;
+        BbStats::async_skipped.fetch_add(1, std::memory_order_relaxed);
+        static const bool flash_log = [] {
+            const char* env = std::getenv("BB_FLASH_LOG");
+            return env && env[0] == '1';
+        }();
+        static std::unordered_set<const GraphicsPipeline*> logged;
+        if (flash_log && logged.insert(&pipeline).second) {
+            std::printf("Async skip: vs %#llx ps %#llx, %u indices x %u, target pitch %u, opaque "
+                        "%d, fused %u, geometry %d\n",
+                        static_cast<unsigned long long>(sel.graphics_key.stage_hashes[u32(Shader::SwStage::Vertex)]),
+                        static_cast<unsigned long long>(
+                            sel.graphics_key.stage_hashes[u32(Shader::SwStage::Fragment)]),
+                        u32(draw_regs.num_indices), draw_regs.num_instances.NumInstances(),
+                        draw_regs.color_buffers[0] ? u32(draw_regs.color_buffers[0].Pitch()) : 0u,
+                        int(opaque), sel.tess_fused_vertices, int(sel.geometry != nullptr));
+        }
         if (!opaque) {
             ++stats.skipped_transparent;
         } else if (!pipeline.HasStandIn()) {
