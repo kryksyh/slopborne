@@ -1028,7 +1028,7 @@ bool Runtime::FlushBarriersBeforePass() {
     // every image barrier in place.
     static const bool images_ahead = [] {
         const char* env = std::getenv("BB_PREPASS_IMAGE_BARRIERS");
-        return !env || env[0] != '0';
+        return env && env[0] == '1';
     }();
     if (!image_barriers.empty()) {
         if (!images_ahead) {

@@ -85,7 +85,7 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::ColorBuffer& col_buffer) noexcept {
 bool StableDepthLayouts() {
     static const bool stable = [] {
         const char* env = std::getenv("BB_DEPTH_LAYOUTS");
-        return !env || env[0] != '0';
+        return env && env[0] == '1';
     }();
     return stable;
 }
