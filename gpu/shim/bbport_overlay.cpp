@@ -773,6 +773,21 @@ void Menu() {
             ImGui::TextDisabled("%s", T("No restart needed"));
         }
         if (ImGui::Button(T("Close"))) keep_open = false;
+        // Leaving the game from a pad (upstream deadinside28#74, #116); a second press confirms.
+        static bool quit_armed;
+        ImGui::SameLine();
+        // One ID for both labels: with a new ID the button lost the pad's focus at the first press.
+        const std::string quit_label =
+            std::string(quit_armed ? T("Press again to quit") : T("Quit game")) + "###bb_quit";
+        if (ImGui::Button(quit_label.c_str())) {
+            if (quit_armed) {
+                SDL_Event quit{};
+                quit.type = SDL_EVENT_QUIT;
+                SDL_PushEvent(&quit);
+            }
+            quit_armed = !quit_armed;
+        }
+        if (quit_armed && !ImGui::IsItemFocused() && !ImGui::IsItemHovered()) quit_armed = false;
     }
     ImGui::TextDisabled("%s", T("Settings save automatically when this menu closes."));
     ImGui::End();
