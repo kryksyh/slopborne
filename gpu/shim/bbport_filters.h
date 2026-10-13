@@ -20,7 +20,7 @@ struct Param {
 /// The port's own shaders (vk_temporal_upscaler.cpp picks the SPIR-V by this id).
 enum Own : int {
     OwnNone = -1, OwnCel, OwnObraDinn, OwnSinCity, OwnEngraving, OwnPencil, OwnOil,
-    OwnWatercolor, OwnAscii, OwnDatamosh, OwnVision, OwnLines, OwnTiltShift, OwnCount
+    OwnWatercolor, OwnAscii, OwnDatamosh, OwnVision, OwnLines, OwnTiltShift, OwnPs1, OwnCount
 };
 
 struct Filter {
@@ -139,6 +139,17 @@ inline constexpr Param TiltShiftParams[] = {
     {"saturation", "Saturation", 0, 2, 1.35f, 0.05f},
 };
 
+inline constexpr Param Ps1Params[] = {
+    {"jitter", "Vertex jitter (grid rows, 0 = off)", 0, 480, 240, 30},
+    {"nearest", "Unfiltered textures", 0, 1, 1, 1},
+    {"colors", "15-bit color", 0, 1, 1, 1},
+    {"dither", "PS1 dither", 0, 1, 1, 1},
+    {"hard", "Hard pixels", 0, 1, 1, 1},
+};
+
+/// The knob `k` of the selected filter when it is the `own` filter, else `fallback`.
+float ActiveOwnKnob(int own, int k, float fallback);
+
 inline constexpr const char* OwnAbout = "Depth-aware filter of the macOS port";
 
 inline constexpr Filter All[] = {
@@ -173,6 +184,11 @@ inline constexpr Filter All[] = {
      VisionParams, int(std::size(VisionParams)), OwnVision},
     {"lines", "Tron / Blueprint", "Fun", "Only the depth outlines, glowing. Port filter.",
      LinesParams, int(std::size(LinesParams)), OwnLines},
+    {"ps1", "PlayStation", "Retro console",
+     "Vertices snap to a coarse grid (the PS1 wobble), unfiltered textures, 15-bit color with "
+     "the PS1's 4x4 dither. For its low polygon counts: Display > Model detail > Lowest; for "
+     "240p: Display > Scene size 428 x 240. Changing the jitter rebuilds shaders for a moment. "
+     "Port filter.", Ps1Params, int(std::size(Ps1Params)), OwnPs1},
     {"tilt_shift", "Tilt-shift miniature", "Fun",
      "Depth blur around a focus distance: Yharnam as a diorama. Port filter.", TiltShiftParams,
      int(std::size(TiltShiftParams)), OwnTiltShift},

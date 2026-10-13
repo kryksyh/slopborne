@@ -5,6 +5,7 @@
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "bbport_toggles.h"
+#include "bbport_filters.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -271,7 +272,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
     }
-    if (upscaler->Enabled() && cb_descs[0].first) {
+    if (upscaler->Enabled() && (key.mrt_mask & 1) && cb_descs[0].first) {
         // The game may store this target blue-first (CB component swap); its display pass
         // swaps back. The filters must read and write in the same order.
         upscaler->OnColorTarget(cb_descs[0].first,
@@ -3497,6 +3498,14 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
         const auto& sampler = stage.samplers[sampler_index];
         auto ssharp =
             prepared ? prepared->sampler_sharps[sampler_index] : sampler.GetSharp(stage);
+        // PS1 filter: unfiltered textures on 3D draws (depth, clip space), not the interface.
+        if (!sampler.is_depth && stage.hw_stage != Shader::HwStage::Compute &&
+            BbFilters::ActiveOwnKnob(BbFilters::OwnPs1, 1, 0.0f) > 0.5f &&
+            Regs().depth_buffer.DepthValid() && !Regs().IsClipDisabled()) {
+            ssharp.xy_mag_filter.Assign(AmdGpu::Filter::Point);
+            ssharp.xy_min_filter.Assign(AmdGpu::Filter::Point);
+            ssharp.mip_filter.Assign(AmdGpu::MipFilter::Point);
+        }
         const auto vk_sampler = texture_cache.GetSampler(
             ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);

@@ -235,6 +235,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
             regs.clipper_control.clip_space == AmdGpu::ClipSpace::MinusWToW;
         info.hw.vs.clip_disable = regs.IsClipDisabled();
         info.hw.vs.motion_vectors = sel.motion;
+        info.hw.vs.snap_lines = sel.snap_lines;
         break;
     }
     case HwStage::Fragment: {
@@ -705,6 +706,12 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
                           regs.stage_enable.raw == AmdGpu::ShaderStageEnable::VgtStages::Vs;
     }
     sel.motion = false;
+    // PS1 filter: 3D draws (depth, clip space) snap their vertices; the interface does not.
+    sel.snap_lines = 0;
+    if (regs.depth_buffer.DepthValid() && !regs.IsClipDisabled()) {
+        sel.snap_lines = u32(BbFilters::ActiveOwnKnob(BbFilters::OwnPs1, 0, 0.0f));
+    }
+    key.vertex_snap = sel.snap_lines != 0;
 
     // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {

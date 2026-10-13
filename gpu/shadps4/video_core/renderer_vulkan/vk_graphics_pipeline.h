@@ -49,6 +49,7 @@ struct GraphicsPipelineKey {
         AmdGpu::DepthBuffer::ZFormat z_format : 2;
         AmdGpu::DepthBuffer::StencilFormat stencil_format : 1;
         u32 depth_clamp_enable : 1;
+        u32 vertex_snap : 1; ///< bbport: PS1 vertex snapping (spare bit: the key keeps its size)
     };
     struct {
         AmdGpu::PrimitiveType prim_type : 5;

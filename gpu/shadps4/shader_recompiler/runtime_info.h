@@ -113,6 +113,8 @@ struct HwVertexRuntimeInfo {
     u32 user_clip_plane_mask{};
     /// bbport: object motion vectors (G-buffer draws), see MotionVectors below.
     bool motion_vectors{};
+    /// bbport: PS1 look: clip positions snap to a grid of this many lines (0: off).
+    u32 snap_lines{};
 
     bool operator==(const HwVertexRuntimeInfo& other) const noexcept = default;
 };
@@ -259,6 +261,9 @@ struct HwComputeRuntimeInfo {
  * It may potentially differ with the same shader module so must be checked.
  * It's also possible to store any other custom information that needs to be part of shader key.
  */
+// The pipeline cache stores RuntimeInfo whole: the vertex member must not grow the union.
+static_assert(sizeof(HwVertexRuntimeInfo) <= sizeof(HwFragmentRuntimeInfo));
+
 struct RuntimeInfo {
     SwStage sw_stage;
     HwStage hw_stage;

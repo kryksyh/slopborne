@@ -125,6 +125,19 @@ Values& Get() {
     return values;
 }
 
+} // namespace BbSettings
+
+float BbFilters::ActiveOwnKnob(int own, int k, float fallback) {
+    const auto& v = BbSettings::Get();
+    const int f = v.retro_filter - 1;
+    if (f < 0 || f >= Count || All[f].own != own || k >= All[f].param_count) {
+        return fallback;
+    }
+    return v.filter_params[f][k];
+}
+
+namespace BbSettings {
+
 void ResetFilterParams(int only) {
     auto& v = Get();
     for (int f = 0; f < BbFilters::Count; ++f) {

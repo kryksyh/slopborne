@@ -35,6 +35,7 @@
 #include "video_core/host_shaders/vision_comp.h"
 #include "video_core/host_shaders/edge_lines_comp.h"
 #include "video_core/host_shaders/tilt_shift_comp.h"
+#include "video_core/host_shaders/ps1_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
@@ -921,7 +922,8 @@ void TemporalUpscaler::RetroFilter(vk::CommandBuffer cmdbuf, vk::ImageView sourc
         static const std::span<const u32> own_code[BbFilters::OwnCount] = {
             CEL_SHADE_COMP, OBRA_DINN_COMP, SIN_CITY_COMP,  ENGRAVING_COMP,
             PENCIL_COMP,    OIL_PAINT_COMP, WATERCOLOR_COMP, ASCII_ART_COMP,
-            DATAMOSH_COMP,  VISION_COMP,    EDGE_LINES_COMP, TILT_SHIFT_COMP};
+            DATAMOSH_COMP,  VISION_COMP,    EDGE_LINES_COMP, TILT_SHIFT_COMP,
+            PS1_COMP};
         // The libretro filters come first in BbFilters::All, in RetroShaders order.
         const int own = BbFilters::All[filter].own;
         const std::span<const u32> code = own < 0 ? RetroShaders[filter] : own_code[own];

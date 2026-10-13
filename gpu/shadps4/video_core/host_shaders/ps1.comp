@@ -1,0 +1,23 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: PlayStation picture: hard scene pixels, 15-bit color (5 bits per channel) and the
+// PS1 GPU's 4x4 ordered dither. The vertex wobble and unfiltered textures are set up by the
+// renderer for this filter (vertex snapping in the recompiler, point samplers).
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+void main() {
+    if (!begin_pixel()) return;
+    bool colors15 = knobs[2] > 0.5, dither = knobs[3] > 0.5, hard = knobs[4] > 0.5;
+    vec3 color = hard ? scene_color(scene_px) : scene_sample(scene_pos);
+    if (colors15) {
+        // The PS1 dither matrix, in 8-bit steps added before truncating to 5 bits.
+        const int matrix[16] = int[16](-4, 0, -3, 1, 2, -2, 3, -1, -3, 1, -4, 0, 3, -1, 2, -2);
+        ivec2 p = (hard ? scene_px : out_pixel) & 3;
+        float offset = dither ? float(matrix[p.y * 4 + p.x]) : 0.0;
+        vec3 c8 = clamp(floor(color * 255.0 + 0.5) + offset, 0.0, 255.0);
+        color = floor(c8 / 8.0) * 8.0 / 255.0;
+    }
+    finish(color);
+}

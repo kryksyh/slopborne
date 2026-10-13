@@ -188,6 +188,29 @@ static void EmitFragmentMotion(EmitContext& ctx) {
                     ctx.OpSelect(f32_type, front, dy, zero), valid, depth}));
 }
 
+// bbport: PS1 look: the clip position snaps to a coarse screen grid (snap_lines rows, 16:9),
+// so vertices jump between grid points as they move, like the PS1's integer vertex coordinates.
+static void SnapPosition(EmitContext& ctx, u32 lines) {
+    const Id type{ctx.F32[1]};
+    const Id position{ctx.OpLoad(ctx.F32[4], ctx.output_position)};
+    const Id x{ctx.OpCompositeExtract(type, position, 0u)};
+    const Id y{ctx.OpCompositeExtract(type, position, 1u)};
+    const Id z{ctx.OpCompositeExtract(type, position, 2u)};
+    const Id w{ctx.OpCompositeExtract(type, position, 3u)};
+    const auto snap = [&](Id v, float cells) {
+        const Id grid{ctx.Constant(type, cells)};
+        const Id ndc{ctx.OpFDiv(type, v, w)};
+        const Id snapped{ctx.OpFDiv(type, ctx.OpRoundEven(type, ctx.OpFMul(type, ndc, grid)), grid)};
+        return ctx.OpFMul(type, snapped, w);
+    };
+    const float half_rows = float(lines) * 0.5f;
+    const Id snapped{ctx.OpCompositeConstruct(
+        ctx.F32[4], std::array<Id, 4>({snap(x, half_rows * 16.0f / 9.0f), snap(y, half_rows), z, w}))};
+    // Behind the camera (w <= 0) the division is meaningless: keep the vertex.
+    const Id in_front{ctx.OpFOrdGreaterThan(ctx.U1[1], w, ctx.Constant(type, 1e-6f))};
+    ctx.OpStore(ctx.output_position, ctx.OpSelect(ctx.F32[4], in_front, snapped, position));
+}
+
 void EmitEpilogue(EmitContext& ctx) {
     if (Sirit::ValidId(ctx.motion_out_cur)) {
         EmitVertexMotion(ctx);
@@ -201,6 +224,10 @@ void EmitEpilogue(EmitContext& ctx) {
     }
     if (ctx.hw_stage == HwStage::Vertex && ctx.runtime_info.hw.vs.clip_disable) {
         ConvertPositionToClipSpace(ctx);
+    }
+    if (ctx.hw_stage == HwStage::Vertex && ctx.runtime_info.hw.vs.snap_lines != 0 &&
+        !ctx.runtime_info.hw.vs.clip_disable) {
+        SnapPosition(ctx, ctx.runtime_info.hw.vs.snap_lines);
     }
 }
 

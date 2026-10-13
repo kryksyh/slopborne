@@ -96,6 +96,7 @@ struct PipelineSelection {
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     bool motion = false;
+    u32 snap_lines = 0; ///< bbport: PS1 filter vertex snapping for this draw (0: off)
     const GeometryReplayStages* geometry{};
     bool allow_geometry = false;
     bool allow_tess_fusion = false; ///< non-indexed, single instance (vk_tess_fusion.h)
