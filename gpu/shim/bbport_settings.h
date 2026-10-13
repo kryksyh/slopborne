@@ -52,6 +52,8 @@ inline constexpr Effect Effects[] = {
     {"tweak_no_camera_rotation", "No camera auto-rotation", false},
     {"tweak_easy_run", "Run with less stick tilt", false},
     {"tweak_ragdoll", "Dark Souls ragdoll physics", false},
+    {"tweak_fast_deflate", "No hitch every ~50 s (faster save compression)", true},
+    {"tweak_quick_reentry", "Quick loading after death and lamp travel", false},
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 /// Live output resolutions: the upscaler's output and the UI host targets.
