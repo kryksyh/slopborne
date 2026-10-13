@@ -6,6 +6,7 @@
 #include <vector>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <time.h>
 #ifndef _WIN32
 #include <sys/resource.h>
@@ -666,9 +667,26 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     const u32 frame_limit = EmulatorSettings.GetFrameLimit();
     auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
                                     : std::chrono::nanoseconds(0);
+    // bbport: loading screens (few draws for 250 ms) go without the frame limit: the game
+    // advances its loading once per frame (rfn9617 6612f325, uncapped: Hunter's Dream 1.72 ->
+    // 1.32 s, an area 3.03 -> 2.54 s). BB_FAST_LOADING=0 keeps the limit there.
+    static const bool fast_loading = [] {
+        const char* env = std::getenv("BB_FAST_LOADING");
+        return !env || env[0] != '0';
+    }();
+    std::chrono::steady_clock::time_point few_draws_since{};
     const auto next_slot = [&](std::chrono::steady_clock::time_point slot) {
-        return std::max(slot + frame_period,
-                        std::chrono::steady_clock::now() + frame_period - frame_period / 16);
+        const auto now = std::chrono::steady_clock::now();
+        if (fast_loading && BbStats::last_frame_draws.load(std::memory_order_relaxed) < 250) {
+            if (few_draws_since == std::chrono::steady_clock::time_point{}) {
+                few_draws_since = now;
+            } else if (now - few_draws_since >= std::chrono::milliseconds(250)) {
+                return now;
+            }
+        } else {
+            few_draws_since = {};
+        }
+        return std::max(slot + frame_period, now + frame_period - frame_period / 16);
     };
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
