@@ -2713,8 +2713,15 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     }
 
     // The shadow clear writes one face of an R16G16 cube map. The general shortcut
-    // below only recognizes entire images. Keep this exact specialization opt-in.
-    static const bool slice_clear = EmulatorSettingsImpl::Flag("BB_COMPUTE_SLICE_CLEAR", false);
+    // below only recognizes entire images. Native slice clears are faster on macOS;
+    // other backends keep the original path until measured there.
+#ifdef __APPLE__
+    static constexpr bool DefaultSliceClear = true;
+#else
+    static constexpr bool DefaultSliceClear = false;
+#endif
+    static const bool slice_clear =
+        EmulatorSettingsImpl::Flag("BB_COMPUTE_SLICE_CLEAR", DefaultSliceClear);
     if (slice_clear && !replaying_dispatch && !BbToggle::Disabled(1ull << 31) &&
         info.pgm_hash == 0x8b355b5a && cs_pgm.dim_y == 1 &&
         cs_pgm.dim_z == 1 && cs_pgm.num_thread_y.full == 1 &&
