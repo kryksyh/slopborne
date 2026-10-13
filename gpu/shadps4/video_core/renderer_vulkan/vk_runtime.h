@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
+#include <boost/container/static_vector.hpp>
 
 #include <unordered_map>
 #include <boost/icl/interval_set.hpp>
@@ -102,6 +103,10 @@ public:
     /// bbport: the pending memory barrier as part of the barriers ahead of the current render
     /// pass (no split) when the pass itself wrote nothing; false when it does not apply.
     bool FlushBarriersBeforePass();
+
+    /// bbport: images attached by the current render pass (set with the pass state): layout
+    /// transitions of any other image can be recorded ahead of the pass instead of splitting it.
+    boost::container::static_vector<vk::Image, 9> pass_images;
 
     /// bbport: notes a buffer range read or written by commands of the current submission.
     void TouchBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size, bool write = false);

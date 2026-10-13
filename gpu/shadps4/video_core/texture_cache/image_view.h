@@ -23,6 +23,9 @@ class Scheduler;
 
 namespace VideoCore {
 
+bool StableDepthLayouts();
+
+
 struct ImageViewInfo {
     ImageViewInfo() = default;
     ImageViewInfo(const AmdGpu::Image& image, const Shader::ImageResource& desc) noexcept;

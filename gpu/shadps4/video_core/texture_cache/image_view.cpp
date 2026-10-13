@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
 #include "common/logging/log.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -79,11 +80,23 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::ColorBuffer& col_buffer) noexcept {
         Vulkan::LiverpoolToVK::SurfaceFormat(col_buffer.GetDataFmt(), col_buffer.GetNumberFmt());
 }
 
+// BB_DEPTH_LAYOUTS=0 restores per-draw depth layouts (stencil on/off and write-enable without
+// depth test each used to reopen the render pass).
+bool StableDepthLayouts() {
+    static const bool stable = [] {
+        const char* env = std::getenv("BB_DEPTH_LAYOUTS");
+        return !env || env[0] != '0';
+    }();
+    return stable;
+}
+
 ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::DepthView view,
                              AmdGpu::DepthControl ctl) {
     format = Vulkan::LiverpoolToVK::DepthFormat(depth_buffer.z_info.format,
                                                 depth_buffer.stencil_info.format);
-    is_storage = ctl.depth_write_enable;
+    // Depth writes need the depth test: without it the draw cannot touch the depth buffer and
+    // the view stays read-only, which keeps the render pass's depth layout stable.
+    is_storage = ctl.depth_write_enable && (ctl.depth_enable || !StableDepthLayouts());
     range.base.layer = view.slice_start;
     range.extent.layers = view.NumSlices() - range.base.layer;
     type = range.extent.layers > 1 ? AmdGpu::ImageType::Color2DArray : AmdGpu::ImageType::Color2D;

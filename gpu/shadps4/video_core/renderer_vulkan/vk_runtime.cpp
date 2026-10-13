@@ -1019,20 +1019,63 @@ bool Runtime::FlushBarriersBeforePass() {
         return false;
     }
     BeforeImageAccess();
-    if (!image_barriers.empty() || !memory_barrier.srcStageMask) {
+    if (image_barriers.empty() && !memory_barrier.srcStageMask) {
         return false;
     }
-    // Writes the barrier covers then all precede the pass, and so the barrier ahead of it.
-    SyncPassRanges();
-    if (!pass_writes.empty() ||
-        std::ranges::any_of(draw_touches, [](const Touch& touch) { return touch.write; })) {
-        return false;
+    // Image transitions move ahead of the pass when the image is not attached by it and its
+    // last writer finished before the pass (attachment, transfer or compute writes; a shader
+    // store from a graphics stage may be this pass's own). BB_PREPASS_IMAGE_BARRIERS=0 keeps
+    // every image barrier in place.
+    static const bool images_ahead = [] {
+        const char* env = std::getenv("BB_PREPASS_IMAGE_BARRIERS");
+        return !env || env[0] != '0';
+    }();
+    if (!image_barriers.empty()) {
+        if (!images_ahead) {
+            return false;
+        }
+        constexpr auto graphics_stages =
+            vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader |
+            vk::PipelineStageFlagBits2::eTessellationControlShader |
+            vk::PipelineStageFlagBits2::eTessellationEvaluationShader |
+            vk::PipelineStageFlagBits2::eGeometryShader | vk::PipelineStageFlagBits2::eAllGraphics |
+            vk::PipelineStageFlagBits2::eAllCommands;
+        constexpr auto shader_stores =
+            vk::AccessFlagBits2::eShaderWrite | vk::AccessFlagBits2::eShaderStorageWrite;
+        for (const auto& barrier : image_barriers) {
+            if (std::ranges::find(pass_images, barrier.image) != pass_images.end()) {
+                return false;
+            }
+            if ((barrier.srcAccessMask & shader_stores) && (barrier.srcStageMask & graphics_stages)) {
+                return false;
+            }
+        }
     }
-    if (!scheduler.RecordBeforePass([](vk::CommandBuffer) {})) {
+    // Writes the memory barrier covers then all precede the pass, and so the barrier ahead of it.
+    if (memory_barrier.srcStageMask) {
+        SyncPassRanges();
+        if (!pass_writes.empty() ||
+            std::ranges::any_of(draw_touches, [](const Touch& touch) { return touch.write; })) {
+            return false;
+        }
+    }
+    boost::container::small_vector<vk::ImageMemoryBarrier2, 8> images(image_barriers.begin(),
+                                                                       image_barriers.end());
+    if (!scheduler.RecordBeforePass([images = std::move(images)](vk::CommandBuffer cmdbuf) {
+            if (images.empty()) {
+                return;
+            }
+            const vk::DependencyInfo info = {
+                .imageMemoryBarrierCount = static_cast<u32>(images.size()),
+                .pImageMemoryBarriers = images.data(),
+            };
+            cmdbuf.pipelineBarrier2(info);
+        })) {
         return false;
     }
     memory_barrier.srcStageMask = vk::PipelineStageFlagBits2::eNone;
     memory_barrier.srcAccessMask = vk::AccessFlagBits2::eNone;
+    image_barriers.clear();
     barrier_tracker.Clear();
     ++access_epoch;
     return true;

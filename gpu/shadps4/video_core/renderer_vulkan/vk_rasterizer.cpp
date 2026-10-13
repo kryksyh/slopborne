@@ -3328,7 +3328,9 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                         desc.view_info.range);
                 } else {
                     const auto new_layout = image.info.props.is_depth
-                                                ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                                                ? (image.info.props.has_stencil && VideoCore::StableDepthLayouts()
+                                                       ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
+                                                       : vk::ImageLayout::eDepthStencilReadOnlyOptimal)
                                                 : vk::ImageLayout::eShaderReadOnlyOptimal;
                     barrier |= runtime.Transit(
                         &image, new_layout, vk::PipelineStageFlagBits2::eAllCommands,
@@ -3511,7 +3513,9 @@ bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedSt
             continue;
         }
         const auto new_layout = image.info.props.is_depth
-                                    ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                                    ? (image.info.props.has_stencil && VideoCore::StableDepthLayouts()
+                                           ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
+                                           : vk::ImageLayout::eDepthStencilReadOnlyOptimal)
                                     : vk::ImageLayout::eShaderReadOnlyOptimal;
         barrier |= runtime.Transit(&image, new_layout, vk::PipelineStageFlagBits2::eAllCommands,
                                    vk::AccessFlagBits2::eShaderRead, entry.range);
@@ -3656,6 +3660,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         BbStats::scene_draws.fetch_add(scene_started, std::memory_order_relaxed);
     }
     RenderState state;
+    runtime.pass_images.clear();
     state.width = instance.GetMaxFramebufferWidth();
     state.height = instance.GetMaxFramebufferHeight();
     state.num_layers = std::numeric_limits<u16>::max();
@@ -3713,6 +3718,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             is_clear ? LiverpoolToVK::ColorBufferClearValue(col_buf) : vk::ClearValue{};
         auto& attachment = state.color_attachments[cb];
         attachment.image_view = *image_view.image_view;
+        if (runtime.pass_images.size() < runtime.pass_images.capacity()) runtime.pass_images.push_back(image->GetImage());
         attachment.image_layout = image->backing->state.layout;
         attachment.clear_value = clear_value.color.uint32;
         attachment.is_clear = is_clear;
@@ -3759,10 +3765,12 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         // Stencil writes can be enabled while depth writes are off.
         const bool stencil_write =
             has_stencil && (regs.depth_control.stencil_enable || is_stencil_clear);
+        // With stable layouts a read-only depth keeps the stencil attachable: draws that toggle
+        // stencil then share one layout instead of reopening the pass on every change.
         const auto new_layout = depth_write
                                     ? has_stencil ? vk::ImageLayout::eDepthStencilAttachmentOptimal
                                                   : vk::ImageLayout::eDepthAttachmentOptimal
-                                : stencil_write
+                                : (stencil_write || (has_stencil && VideoCore::StableDepthLayouts()))
                                     ? vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal
                                 : has_stencil ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
                                               : vk::ImageLayout::eDepthReadOnlyOptimal;
@@ -3779,6 +3787,7 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
 
         auto& attachment = state.depth_stencil_attachment;
         attachment.image_view = *image_view.image_view;
+        if (runtime.pass_images.size() < runtime.pass_images.capacity()) runtime.pass_images.push_back(image.GetImage());
         attachment.image_layout = image.backing->state.layout;
         attachment.clear_value = {};
         attachment.is_clear = 0;
