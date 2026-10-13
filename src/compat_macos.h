@@ -19,6 +19,7 @@ int bb_macos_rwlock_timedwrlock(pthread_rwlock_t *, const struct timespec *);
 int bb_macos_cond_timedwait_monotonic(pthread_cond_t *, pthread_mutex_t *, const struct timespec *);
 void *bb_macos_map_fixed(uintptr_t, size_t, int);
 int bb_macos_memory_fd(void);
+void bb_macos_latency_critical(void);
 #define pthread_mutex_timedlock bb_macos_mutex_timedlock
 #define pthread_rwlock_timedrdlock bb_macos_rwlock_timedrdlock
 #define pthread_rwlock_timedwrlock bb_macos_rwlock_timedwrlock

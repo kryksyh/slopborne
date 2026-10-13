@@ -1,9 +1,11 @@
 #include "compat_macos.h"
 #ifdef __APPLE__
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <objc/objc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -71,5 +73,28 @@ int bb_macos_memory_fd(void) {
     }
     errno = EEXIST;
     return -1;
+}
+/* [[NSProcessInfo processInfo] beginActivityWithOptions:reason:] through the Objective-C runtime:
+ * UserInitiated | LatencyCritical turns off timer coalescing and App Nap, which delay the game's
+ * short sleeps and the GPU threads' wakeups (on battery most). Kept for the whole process.
+ * From PabloVSouza/bloodborne_mac e8fe937. */
+void bb_macos_latency_critical(void) {
+    typedef void *(*GetClass)(const char *);
+    typedef SEL (*RegisterName)(const char *);
+    typedef void *(*Send0)(void *, SEL);
+    typedef void *(*SendString)(void *, SEL, const char *);
+    typedef void *(*SendActivity)(void *, SEL, unsigned long long, void *);
+    GetClass get_class=(GetClass)dlsym(RTLD_DEFAULT,"objc_getClass");
+    RegisterName sel=(RegisterName)dlsym(RTLD_DEFAULT,"sel_registerName");
+    void *send=dlsym(RTLD_DEFAULT,"objc_msgSend");
+    if (!get_class || !sel || !send) return;
+    void *process_class=get_class("NSProcessInfo"), *string_class=get_class("NSString");
+    if (!process_class || !string_class) return;
+    void *info=((Send0)send)(process_class,sel("processInfo"));
+    void *reason=((SendString)send)(string_class,sel("stringWithUTF8String:"),"Bloodborne");
+    const unsigned long long user_initiated=0x00FFFFFFULL, latency_critical=0xFF00000000ULL;
+    void *activity=((SendActivity)send)(info,sel("beginActivityWithOptions:reason:"),
+                                        user_initiated|latency_critical,reason);
+    if (activity) ((Send0)send)(activity,sel("retain"));
 }
 #endif

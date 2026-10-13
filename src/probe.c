@@ -438,10 +438,12 @@ void runtime_restart(void) {
 #ifdef BB_MACOS_RENDERER
 static int probe_main(int argc, char **argv);
 int bbgpu_macos_run(int (*entry)(int, char **), int argc, char **argv);
+void bb_macos_latency_critical(void);
 int main(int argc, char **argv) {
     /* Diagnostics do not need AppKit or a window event loop. */
     if (argc<2 || (argc==2 && !strcmp(argv[1],"--vulkan-only"))) return probe_main(argc,argv);
     for (int i=2;i<argc;++i) if (!strcmp(argv[i],"--cpu-only")) return probe_main(argc,argv);
+    bb_macos_latency_critical();
     return bbgpu_macos_run(probe_main,argc,argv);
 }
 static int probe_main(int argc, char **argv) {
