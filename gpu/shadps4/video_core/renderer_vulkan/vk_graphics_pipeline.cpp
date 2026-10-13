@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <thread>
 #include <utility>
 #include <boost/container/small_vector.hpp>
 
@@ -588,10 +589,20 @@ void GraphicsPipeline::QueueStandIn(AsyncCompiler& async) {
 }
 
 void GraphicsPipeline::CompileNow() {
+    if (compile_claimed.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
     Create(pending_cache, pending->pipeline_info, pending_name, true);
     pending.reset();
     ready.store(true, std::memory_order_release);
     async->stats.NoteReady(SinceQueuedMs());
+}
+
+void GraphicsPipeline::Prioritize() {
+    CompileNow();
+    while (!IsReady()) {
+        std::this_thread::yield();
+    }
 }
 
 void GraphicsPipeline::Create(vk::PipelineCache pipeline_cache,

@@ -152,6 +152,9 @@ public:
     void Create(vk::PipelineCache pipeline_cache, const vk::GraphicsPipelineCreateInfo& pipeline_info,
                 const std::string& debug_str, bool may_fail);
     void CompileNow();
+    /// A draw that cannot go without this pipeline: compiles it on the calling thread unless a
+    /// worker already started it (then waits for that), instead of waiting behind the queue.
+    void Prioritize();
     void QueueStandIn(AsyncCompiler& async);
 
     /// bbport: create-info of a compile handed to the AsyncCompiler, until it ran.
@@ -172,6 +175,7 @@ public:
     vk::PipelineCache pending_cache;
     std::string pending_name;
     std::atomic<bool> failed{false};
+    std::atomic<bool> compile_claimed{false};
 
     /// Gets the attributes and bindings for vertex inputs.
     template <typename Attribute, typename Binding>

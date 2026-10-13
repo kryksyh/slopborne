@@ -552,8 +552,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
                 texture_target |= regs.color_buffers[cb].Pitch() != 1920;
             }
         }
-        while (texture_target && !it->second->IsReady()) {
-            std::this_thread::yield();
+        if (texture_target) {
+            it->second->Prioritize();
         }
     }
     const auto& draw_regs = *sel.regs;
@@ -578,9 +578,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         draw_regs.color_buffers[0].Pitch() >= 640) {
         ++async_compiler->stats.fullscreen_waits;
         BbStats::async_fullscreen_waits.fetch_add(1, std::memory_order_relaxed);
-        while (!it->second->IsReady()) {
-            std::this_thread::yield();
-        }
+        it->second->Prioritize();
     }
     if (!it->second->IsReady()) {
         const auto& pipeline = *it->second;
