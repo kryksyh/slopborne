@@ -241,6 +241,11 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     GraphicsPipeline::SerializationSupport sdata{};
     sdata.Deserialize(ar);
 
+    // Motion pipelines need this session's vertex shader (see LoadPipelineStage): built on use.
+    if (sel.graphics_key.motion_vectors) {
+        return false;
+    }
+
     // bbport: a fused tessellation pipeline (FuseTessellation; hull stage, no patches): its
     // vertex stage is the fused shader stored beside the key, the hull and domain stages give
     // the bindings.

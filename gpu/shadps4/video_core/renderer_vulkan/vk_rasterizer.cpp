@@ -2488,8 +2488,22 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
                                   regs.vgt_instance_step_rate_0, regs.vgt_instance_step_rate_1);
     }
 
+    if (motion_draw && guest_buffers.empty()) {
+        // Vertex pulling (emulated robustness): no bindings; the shader reads the fetch
+        // shader's streams itself, and those identify the geometry.
+        const auto& vs = pipeline->GetStage(Shader::SwStage::Vertex);
+        if (const auto fetch_data = Shader::Gcn::ParseFetchShader(vs)) {
+            for (const auto& attrib : fetch_data->attributes) {
+                guest_buffers.emplace_back(attrib.GetSharp(vs));
+            }
+        }
+    }
     if (bindings.empty()) {
         // If there are no bindings, there is nothing further to do.
+        if (motion_draw && !guest_buffers.empty()) {
+            motion_geometry = XXH3_64bits(guest_buffers.data(),
+                                          guest_buffers.size() * sizeof(AmdGpu::Buffer));
+        }
         return;
     }
     if (motion_draw && !guest_buffers.empty()) {
