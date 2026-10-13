@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: pencil sketch: up to four layers of hatching that appear as the tone darkens, strokes
+// turned along the surfaces (normals reconstructed from depth), wobbly lines, paper grain,
+// outlines; optionally tinted with the scene's colors (colored pencil).
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+float stroke(vec2 pos, float angle, float spacing, float seed) {
+    vec2 dir = vec2(cos(angle), sin(angle));
+    vec2 n = vec2(-dir.y, dir.x);
+    float along = dot(pos, dir), across = dot(pos, n) / spacing;
+    float line = floor(across);
+    // Each stroke wobbles and breaks along its length.
+    float wobble = (hash12(vec2(line, seed)) - 0.5) * 0.35 +
+                   0.12 * sin(along * 0.05 + hash12(vec2(seed, line)) * 6.28);
+    float d = abs(fract(across + wobble) - 0.5) * spacing;
+    float gap = step(0.18, hash12(vec2(line, floor(along / (spacing * 6.0)) + seed * 7.0)));
+    return clamp(0.9 - d, 0.0, 1.0) * gap;
+}
+
+void main() {
+    if (!begin_pixel()) return;
+    float spacing = knobs[0] * pixel_scale();
+    int layers = int(knobs[1] + 0.5);
+    bool surface = knobs[2] > 0.5, outlines = knobs[4] > 0.5;
+    float grain = knobs[3], tint = knobs[5];
+    vec3 color = scene_color(scene_px);
+    float darkness = 1.0 - local_tone(scene_px, 0.45, true);
+    float base = 0.6;
+    if (surface) {
+        vec3 n = view_normal(scene_px);
+        if (dot(n.xy, n.xy) > 1e-4) base = atan(-n.y, n.x) + 1.5708; // across the slope
+    }
+    vec2 pos = vec2(out_pixel) + camera_offset() * pixel_scale();
+    float graphite = 0.0;
+    const float angles[4] = float[4](0.0, 1.5708, 0.7854, -0.7854);
+    for (int i = 0; i < 4; ++i) {
+        if (i >= layers) break;
+        float threshold = float(i + 1) / float(layers + 1);
+        if (darkness > threshold) {
+            graphite = max(graphite, stroke(pos, base + angles[i], spacing, float(i)) *
+                                         clamp((darkness - threshold) * 4.0, 0.0, 1.0));
+        }
+    }
+    if (outlines && depth_edge(scene_px, 1.0, 1) > 0.5) graphite = max(graphite, 0.95);
+    float paper_grain = 1.0 - grain * 0.12 * hash12(vec2(out_pixel));
+    vec3 paper = vec3(0.96, 0.95, 0.91) * paper_grain;
+    vec3 lead = mix(vec3(0.18, 0.18, 0.2), color / max(luma(color), 0.05) * 0.35, tint);
+    finish(mix(paper, lead, graphite * 0.9));
+}

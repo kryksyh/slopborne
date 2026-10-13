@@ -1,0 +1,44 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: thermal camera (heat from brightness and nearness), green night vision, or a
+// posterized "Predator" heat view; sensor noise, scope vignette, scanlines.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+vec3 heat_palette(float t) {
+    const vec3 stops[6] = vec3[6](vec3(0.0, 0.0, 0.05), vec3(0.15, 0.0, 0.45), vec3(0.65, 0.0, 0.55),
+                                  vec3(0.95, 0.25, 0.05), vec3(1.0, 0.8, 0.1), vec3(1.0, 1.0, 0.95));
+    t = clamp(t, 0.0, 1.0) * 5.0;
+    int i = min(int(t), 4);
+    return mix(stops[i], stops[i + 1], t - float(i));
+}
+
+void main() {
+    if (!begin_pixel()) return;
+    int mode = int(knobs[0] + 0.5);
+    float noise_amount = knobs[1], depth_weight = knobs[2];
+    bool scope = knobs[3] > 0.5, scanlines = knobs[4] > 0.5;
+    vec3 color = scene_sample(scene_pos);
+    float l = lift(luma(color));
+    float dist = scene_distance(scene_px);
+    float near = dist > 1e5 ? 0.0 : clamp(1.0 - log2(1.0 + dist) / 6.0, 0.0, 1.0);
+    float noise = (hash12(vec2(out_pixel) + float(frame_count) * 13.7) - 0.5) * noise_amount;
+    vec3 result;
+    if (mode == 1) {
+        float v = clamp(l * 1.6 + noise, 0.0, 1.0);
+        result = vec3(0.1, 1.0, 0.25) * pow(v, 0.8) + vec3(0.0, 0.05, 0.0);
+    } else {
+        float heat = mix(l, l * 0.4 + near * 0.8, depth_weight) + noise;
+        if (mode == 2) heat = floor(heat * 7.0) / 6.0;
+        result = heat_palette(heat);
+    }
+    if (scanlines) result *= 0.82 + 0.18 * float(out_pixel.y % 3 != 0);
+    if (scope) {
+        vec2 c = (out_uv - 0.5) * vec2(output_size.x / output_size.y, 1.0);
+        float r = length(c);
+        result *= smoothstep(0.52, 0.42, r);
+        result += vec3(0.0, 0.3, 0.1) * float(mode == 1) * smoothstep(0.003, 0.0, abs(r - 0.43));
+    }
+    finish(result);
+}

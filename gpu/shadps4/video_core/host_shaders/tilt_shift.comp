@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: tilt-shift miniature: everything outside a band of distance around the focus is
+// blurred in proportion to how far it lies (in log distance), colors pushed like a toy model.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+void main() {
+    if (!begin_pixel()) return;
+    bool auto_focus = knobs[0] > 0.5;
+    float focus = knobs[1], band = knobs[2], blur = knobs[3], saturation = knobs[4];
+    if (auto_focus) {
+        // The median-ish distance of a few points around the screen center.
+        float a = scene_distance(ivec2(input_size * 0.5));
+        float b = scene_distance(ivec2(input_size * vec2(0.45, 0.55)));
+        float c = scene_distance(ivec2(input_size * vec2(0.55, 0.55)));
+        focus = max(min(a, b), min(max(a, b), c));
+        focus = min(focus, 1e4);
+    }
+    float dist = min(scene_distance(scene_px), 1e4);
+    float defocus = abs(log2(max(dist, 0.01) / max(focus, 0.01)));
+    float radius = clamp((defocus - band) / max(band, 0.01), 0.0, 1.0) * blur;
+    vec3 color = scene_sample(scene_pos);
+    if (radius > 0.25) {
+        vec3 sum = color;
+        for (int i = 0; i < 16; ++i) {
+            float ang = float(i) * 2.39996;
+            float r = radius * sqrt((float(i) + 0.5) / 16.0);
+            sum += scene_sample(scene_pos + vec2(cos(ang), sin(ang)) * r);
+        }
+        color = sum / 17.0;
+    }
+    color = mix(vec3(luma(color)), color, saturation);
+    color = clamp((color - 0.5) * 1.08 + 0.52, 0.0, 1.0);
+    vec2 v = out_uv - 0.5;
+    color *= 1.0 - dot(v, v) * 0.5;
+    finish(color);
+}

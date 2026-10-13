@@ -58,6 +58,18 @@ public:
     [[nodiscard]] std::array<u32, 2> RenderSize() const noexcept {
         return render_size;
     }
+    /// bbport: the current camera's view-to-world rotation (3x4 rows) and projection (x scale,
+    /// y scale, z scale, z offset);
+    /// false before the first camera of the scene.
+    [[nodiscard]] bool ViewToWorld(std::array<float, 12>& inv_view,
+                                   std::array<float, 4>& projection) const noexcept {
+        if (!current.valid) {
+            return false;
+        }
+        inv_view = current.inv_view;
+        projection = current.proj;
+        return true;
+    }
     /// Vertical field of view and near/far planes of the current camera.
     [[nodiscard]] float VerticalFov() const noexcept;
     [[nodiscard]] float Near() const noexcept;

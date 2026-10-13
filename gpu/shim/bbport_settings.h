@@ -5,6 +5,9 @@
 
 #pragma once
 
+#include <array>
+#include "bbport_filters.h"
+
 #include <atomic>
 #include <string>
 #include "bbport_controller_prompts.h"
@@ -63,6 +66,7 @@ inline constexpr int RenderHeights[] = {1080, 900, 720, 540, 360, 240};
 inline constexpr int RenderResCount = 6;
 inline constexpr int RenderNative = 0;
 
+
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
     std::atomic<int> preset{NativeAA};
@@ -76,6 +80,9 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// bbport: the Filters tab: 0 off, else BbFilters::All[retro_filter - 1]; knobs per filter.
+    std::atomic<int> retro_filter{0};
+    std::array<std::array<std::atomic<float>, BbFilters::MaxParams>, BbFilters::Count> filter_params{};
     std::atomic<int> controller_layout{BbPrompts::Auto};
     // Frontend-only, protected by the overlay mutex after startup Load().
     std::string controller_device;
@@ -138,6 +145,8 @@ bool ResolutionNeedsRestart();
 /// Menu choice of render_res: a reduced size needs an upscaler (MetalFX where supported); the
 /// upscaler used before it comes back at native.
 void SelectRenderRes(int render_res);
+/// Knobs back to their defaults: one filter (index into BbFilters::All) or all (-1).
+void ResetFilterParams(int only = -1);
 /// Writes the file (menu changes).
 void Save();
 

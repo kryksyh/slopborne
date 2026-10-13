@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Unused since the retro filters moved to host_shaders/libretro (kept, not built).
+// bbport: stylized filters on the upscaled scene, before the native-resolution UI is drawn.
+// "Pixels" are the scene's own pixels (scene size from the push constants), so a 240p scene
+// gives 240 scanlines or 240-row blocks at any output size.
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0, rgba32f) uniform readonly image2D source_img;
+layout(binding = 1, rgba8) uniform writeonly image2D result_img;
+layout(push_constant) uniform Params {
+    int mode;
+    uint frame;
+    vec2 scene_size;
+};
+
+const int CRT = 1, PIXELATED = 2, POSTERIZE = 3, GAME_BOY = 4, ONE_BIT = 5, VHS = 6;
+
+ivec2 out_size;
+
+vec3 load(vec2 uv) {
+    ivec2 p = clamp(ivec2(uv * vec2(out_size)), ivec2(0), out_size - 1);
+    return clamp(imageLoad(source_img, p).rgb, vec3(0), vec3(1));
+}
+
+// Center of the scene pixel containing uv: nearest-neighbour look at any output size.
+vec2 block_center(vec2 uv) {
+    return (floor(uv * scene_size) + 0.5) / scene_size;
+}
+
+float bayer8(ivec2 p) {
+    const int m[64] = int[64](0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+                              12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+                              3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+                              15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21);
+    return (float(m[(p.y & 7) * 8 + (p.x & 7)]) + 0.5) / 64.0;
+}
+
+float luma(vec3 c) {
+    return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+vec3 crt(vec2 uv, ivec2 p) {
+    // Barrel curvature; outside the tube is black.
+    vec2 c = uv * 2.0 - 1.0;
+    c *= 1.0 + 0.04 * dot(c, c).xx * vec2(1.0, 1.25);
+    vec2 cuv = c * 0.5 + 0.5;
+    if (any(lessThan(cuv, vec2(0))) || any(greaterThan(cuv, vec2(1)))) return vec3(0);
+    vec3 color = load(cuv);
+    // A scanline per scene row, brighter rows bleed wider.
+    float row = fract(cuv.y * scene_size.y);
+    float beam = mix(0.55, 1.0, luma(color));
+    float scan = exp(-pow((row - 0.5) / (0.38 * beam), 2.0));
+    // Aperture grille: one RGB triad every three output columns.
+    vec3 mask = vec3(0.75);
+    mask[p.x % 3] = 1.25;
+    float vignette = smoothstep(1.35, 0.55, length(c * vec2(0.9, 1.0)));
+    return pow(color, vec3(1.1)) * scan * mask * vignette * 1.35;
+}
+
+vec3 vhs(vec2 uv) {
+    float t = float(frame) * 0.016;
+    // Line wobble, a rolling tracking band and chroma bleeding sideways.
+    float band = smoothstep(0.02, 0.0, abs(fract(uv.y - t * 0.08) - 0.5) - 0.48);
+    uv.x += (hash(vec2(floor(uv.y * scene_size.y), floor(t * 30.0))) - 0.5) * 0.002 + band * 0.01;
+    vec3 y = load(uv);
+    vec3 r = load(uv + vec2(0.004, 0.0));
+    vec3 b = load(uv - vec2(0.004, 0.0));
+    vec3 color = vec3(r.r, y.g, b.b);
+    color = mix(vec3(luma(color)), color, 0.75);
+    color += (hash(uv * vec2(out_size) + t) - 0.5) * 0.08;
+    return color * (1.0 - 0.25 * band);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    out_size = imageSize(result_img);
+    if (any(greaterThanEqual(p, out_size))) return;
+    vec2 uv = (vec2(p) + 0.5) / vec2(out_size);
+    vec3 color = load(uv);
+    ivec2 scene_p = ivec2(uv * scene_size);
+    if (mode == CRT) {
+        color = crt(uv, p);
+    } else if (mode == PIXELATED) {
+        color = load(block_center(uv));
+    } else if (mode == POSTERIZE) {
+        const float levels = 5.0;
+        color = floor(load(block_center(uv)) * (levels - 1.0) + bayer8(scene_p)) / (levels - 1.0);
+    } else if (mode == GAME_BOY) {
+        const vec3 palette[4] = vec3[4](vec3(0.06, 0.22, 0.06), vec3(0.19, 0.38, 0.19),
+                                        vec3(0.55, 0.67, 0.06), vec3(0.61, 0.74, 0.06));
+        // Bloodborne is dark: stretch the shadows before quantizing.
+        float l = pow(clamp(luma(load(block_center(uv))) * 1.6, 0.0, 1.0), 0.6);
+        int i = clamp(int(l * 3.0 + bayer8(scene_p) - 0.5 + 0.5), 0, 3);
+        color = palette[i];
+    } else if (mode == ONE_BIT) {
+        float l = pow(clamp(luma(load(block_center(uv))) * 1.8, 0.0, 1.0), 0.7);
+        color = vec3(l > bayer8(scene_p) ? 0.92 : 0.08);
+    } else if (mode == VHS) {
+        color = vhs(uv);
+    }
+    imageStore(result_img, p, vec4(clamp(color, vec3(0), vec3(1)), 1));
+}

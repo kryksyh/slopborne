@@ -1,0 +1,190 @@
+#version 450
+// bbport: compute port of the libretro shader scanlines/shaders/scanlines-sine-abs.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+    Scanlines Sine Absolute Value
+    An ultra light scanline shader
+    by RiskyJumps
+	license: public domain
+*/
+
+#pragma parameter amp          "Amplitude"      1.2500  0.000 2.000 0.05
+#pragma parameter phase        "Phase"          0.5000  0.000 2.000 0.05
+#pragma parameter lines_black  "Lines Blacks"   0.0000  0.000 1.000 0.05
+#pragma parameter lines_white  "Lines Whites"   1.0000  0.000 2.000 0.05
+ 
+#define freq             0.500000
+#define offset           0.000000
+#define pi               3.141592654
+
+#ifndef PARAMETER_UNIFORM
+#define amp              1.250000
+#define phase            0.500000
+#define lines_black      0.000000
+#define lines_white      1.000000
+#endif
+ 
+
+
+#ifdef GL_ES
+
+#else
+
+#endif
+ 
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+
+
+vec4 COL0;
+
+float angle;
+ 
+vec4 _oPosition1;
+
+
+
+
+
+
+
+#ifdef PARAMETER_UNIFORM
+#define amp (bbport_param[0])
+#define phase (bbport_param[1])
+#define lines_black (bbport_param[2])
+#define lines_white (bbport_param[3])
+#endif
+ 
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    COL0 = COLOR;
+    TEX0.xy = TexCoord.xy;
+ 
+    float omega = 2.0 * pi * freq;              // Angular frequency
+    angle = TEX0.y * omega * TextureSize.y + phase;
+}
+ 
+
+ 
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+ 
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+ 
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutputSize vec4(OutputSize, 1.0 / OutputSize)
+ 
+#ifdef PARAMETER_UNIFORM
+#define amp (bbport_param[0])
+#define phase (bbport_param[1])
+#define lines_black (bbport_param[2])
+#define lines_white (bbport_param[3])
+#endif
+ 
+void shader_main()
+{
+    vec3 color = COMPAT_TEXTURE(Source, vTexCoord).xyz;
+    float grid;
+ 
+    float lines;
+ 
+    lines = sin(angle);
+    lines *= amp;
+    lines += offset;
+    lines = abs(lines);
+    lines *= lines_white - lines_black;
+    lines += lines_black;
+    color *= lines;
+ 
+    FragColor = vec4(color.xyz, 1.0);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

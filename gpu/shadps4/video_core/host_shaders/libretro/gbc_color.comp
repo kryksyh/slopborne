@@ -1,0 +1,199 @@
+#version 450
+// bbport: compute port of the libretro shader handheld/shaders/color/gbc-color.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+*/
+// Shader that replicates the LCD dynamics from a GameBoy Color
+
+// Compatibility #ifdefs needed for parameters
+
+// Parameter lines go here:
+// All parameter floats need to have COMPAT_PRECISION in front of them
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+   Shader Modified: Pokefan531
+   Color Mangler
+   Author: hunterk
+   License: Public domain
+*/
+// Shader that replicates the LCD dynamics from a GameBoy Color
+
+// Compatibility #ifdefs needed for parameters
+#ifdef GL_ES
+#define COMPAT_PRECISION mediump
+#else
+#define COMPAT_PRECISION
+#endif
+
+// Parameter lines go here:
+#pragma parameter lighten_screen "Lighten Screen" 1.0 0.0 1.0 0.05
+#ifdef PARAMETER_UNIFORM
+// All parameter floats need to have COMPAT_PRECISION in front of them
+#define lighten_screen (bbport_param[0])
+#else
+#define lighten_screen 1.0
+#endif
+
+#define target_gamma 2.2
+#define display_gamma 2.2
+#define sat 1.0
+#define lum 0.94
+#define contrast 1.0
+#define blr 0.0
+#define blg 0.0
+#define blb 0.0
+#define r 0.82
+#define g 0.665
+#define b 0.73
+#define rg 0.125
+#define rb 0.195
+#define gr 0.24
+#define gb 0.075
+#define br -0.06
+#define bg 0.21
+#define overscan_percent_x 0.0
+#define overscan_percent_y 0.0
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+
+
+
+
+
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    COL0 = COLOR;
+    TEX0.xy = TexCoord.xy;
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+#define bbport_texture(c, d) COMPAT_TEXTURE(c, d)
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define outsize vec4(OutputSize, 1.0 / OutputSize)
+
+void shader_main()
+{
+   vec4 screen = pow(bbport_texture(Source, vTexCoord), vec4(target_gamma + (lighten_screen * -1.0))).rgba;
+   vec4 avglum = vec4(0.5);
+   screen = mix(screen, avglum, (1.0 - contrast));
+   
+ //				r   g    b   black
+mat4 color = mat4(r,  rg,  rb, 0.0,  //red channel
+			   gr,  g,   gb, 0.0,  //green channel
+			   br,  bg,  b,  0.0,  //blue channel
+			  blr, blg, blb,    0.0); //alpha channel; these numbers do nothing for our purposes.
+			  
+mat4 adjust = mat4((1.0 - sat) * 0.3086 + sat, (1.0 - sat) * 0.3086, (1.0 - sat) * 0.3086, 1.0,
+(1.0 - sat) * 0.6094, (1.0 - sat) * 0.6094 + sat, (1.0 - sat) * 0.6094, 1.0,
+(1.0 - sat) * 0.0820, (1.0 - sat) * 0.0820, (1.0 - sat) * 0.0820 + sat, 1.0,
+0.0, 0.0, 0.0, 1.0);
+	color *= adjust;
+	screen = clamp(screen * lum, 0.0, 1.0);
+	screen = color * screen;
+	FragColor = pow(screen, vec4(1.0 / display_gamma));
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

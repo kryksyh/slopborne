@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: Sin City: hard black and white from the surface brightness, red (blood) kept,
+// black outlines, film grain.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+void main() {
+    if (!begin_pixel()) return;
+    float threshold = knobs[0], softness = knobs[1], keep_red = knobs[2], tolerance = knobs[3];
+    bool outlines = knobs[4] > 0.5;
+    float grain = knobs[5];
+    vec3 color = scene_color(scene_px);
+    float tone = local_tone(scene_px, 0.4, true);
+    float bw = smoothstep(threshold - softness, threshold + softness, tone);
+    // Redness: how far red stands above the other channels, relative to its brightness.
+    float redness = (color.r - max(color.g, color.b)) / max(color.r, 1e-3);
+    float red = smoothstep(tolerance, tolerance + 0.15, redness) * step(0.04, color.r) * keep_red;
+    vec3 blood = vec3(0.85, 0.02, 0.03) * mix(0.6, 1.1, clamp(lift(color.r) * 1.2, 0.0, 1.0));
+    vec3 result = mix(vec3(bw), blood, red);
+    if (outlines && depth_edge(scene_px, 1.0, 1) > 0.5) result = vec3(0.0);
+    result += (hash12(vec2(out_pixel) + float(frame_count % 64) * 17.0) - 0.5) * grain;
+    finish(result);
+}

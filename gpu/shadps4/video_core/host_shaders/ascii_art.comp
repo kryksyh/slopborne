@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: ASCII art: the picture in character cells, the character picked by brightness from
+// " .:-=+*#%@" (a built-in 5x7 font) or block shades; terminal green, amber, white or the
+// scene's own colors.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+// 5x7 glyphs, one row per entry (bit 4 = left column), for " .:-=+*#%@".
+const int font[70] = int[70](
+    0, 0, 0, 0, 0, 0, 0,                          // ' '
+    0, 0, 0, 0, 0, 12, 12,                        // '.'
+    0, 12, 12, 0, 12, 12, 0,                      // ':'
+    0, 0, 0, 31, 0, 0, 0,                         // '-'
+    0, 0, 31, 0, 31, 0, 0,                        // '='
+    0, 4, 4, 31, 4, 4, 0,                         // '+'
+    0, 21, 14, 31, 14, 21, 0,                     // '*'
+    10, 10, 31, 10, 31, 10, 10,                   // '#'
+    25, 26, 2, 4, 8, 11, 19,                      // '%'
+    14, 17, 23, 21, 23, 16, 14);                  // '@'
+
+void main() {
+    if (!begin_pixel()) return;
+    float cell_w = knobs[0];
+    int palette = int(knobs[1] + 0.5);
+    bool blocks = knobs[2] > 0.5;
+    float background = knobs[3];
+    vec2 cell_size = vec2(cell_w, floor(cell_w * 1.4));
+    vec2 cell = floor(vec2(out_pixel) / cell_size);
+    vec2 inside = (vec2(out_pixel) - cell * cell_size) / cell_size;
+    // Cell brightness: five samples of the scene under the cell.
+    vec2 center = (cell + 0.5) * cell_size / output_size * input_size;
+    vec2 spread = cell_size / output_size * input_size * 0.3;
+    vec3 color = (scene_sample(center) + scene_sample(center + spread) +
+                  scene_sample(center - spread) + scene_sample(center + vec2(spread.x, -spread.y)) +
+                  scene_sample(center + vec2(-spread.x, spread.y))) / 5.0;
+    float level = clamp(lift(luma(color)), 0.0, 0.999);
+    float on;
+    if (blocks) {
+        // Shade blocks: an ordered pattern of growing density inside the cell.
+        on = level > bayer4(ivec2(inside * 8.0)) ? 1.0 : 0.0;
+    } else {
+        int glyph = int(level * 10.0);
+        ivec2 g = ivec2(inside * vec2(7.0, 9.0)) - ivec2(1, 1); // 1-pixel margin around 5x7
+        on = 0.0;
+        if (g.x >= 0 && g.x < 5 && g.y >= 0 && g.y < 7) {
+            on = float((font[glyph * 7 + g.y] >> (4 - g.x)) & 1);
+        }
+    }
+    vec3 ink;
+    if (palette == 1) ink = vec3(1.0, 0.7, 0.2);
+    else if (palette == 2) ink = color / max(max(color.r, max(color.g, color.b)), 0.05);
+    else if (palette == 3) ink = vec3(0.92);
+    else ink = vec3(0.25, 1.0, 0.4);
+    vec3 back = scene_color(scene_px) * background * 0.6;
+    finish(mix(back, ink, on));
+}

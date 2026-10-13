@@ -52,6 +52,28 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "filter") {
+        v.retro_filter = 0;
+        for (int fi = 0; fi < BbFilters::Count; ++fi) {
+            if (value == BbFilters::All[fi].key) {
+                v.retro_filter = fi + 1;
+            }
+        }
+    } else if (key.starts_with("filter.")) {
+        // filter.<filter key>.<knob key>
+        const auto dot = key.find('.', 7);
+        const std::string filter_key = key.substr(7, dot - 7);
+        const std::string knob = dot == std::string::npos ? "" : key.substr(dot + 1);
+        for (int fi = 0; fi < BbFilters::Count; ++fi) {
+            const auto& filter = BbFilters::All[fi];
+            if (filter_key != filter.key) continue;
+            for (int k = 0; k < filter.param_count; ++k) {
+                const auto& param = filter.params[k];
+                if (knob == param.key) {
+                    v.filter_params[fi][k] = std::clamp(f, param.min, param.max);
+                }
+            }
+        }
     } else if (key == "controller_layout") {
         v.controller_layout = std::clamp(i, 0, int(BbPrompts::LayoutCount) - 1);
     } else if (key == "controller_device") {
@@ -103,11 +125,22 @@ Values& Get() {
     return values;
 }
 
+void ResetFilterParams(int only) {
+    auto& v = Get();
+    for (int f = 0; f < BbFilters::Count; ++f) {
+        if (only >= 0 && f != only) continue;
+        for (int k = 0; k < BbFilters::All[f].param_count; ++k) {
+            v.filter_params[f][k] = BbFilters::All[f].params[k].def;
+        }
+    }
+}
+
 void Load() {
     auto& v = Get();
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = Effects[e].default_on;
     }
+    ResetFilterParams();
     if (FILE* file = std::fopen(Path(), "r")) {
         char line[256];
         while (std::fgets(line, sizeof(line), file)) {
@@ -134,7 +167,7 @@ void Load() {
         {"BB_REACTIVE", "reactive"},              {"BB_REACTIVE_SCALE", "reactive_scale"},
         {"BB_REACTIVE_THRESHOLD", "reactive_threshold"}, {"BB_REACTIVE_MAX", "reactive_max"},
         {"BB_UPSCALE_PRESET", "preset"},            {"BB_OBJECT_MOTION", "object_motion"},
-        {"BB_SHOW_FPS", "show_fps"},
+        {"BB_SHOW_FPS", "show_fps"},              {"BB_FILTER", "filter"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env)) {
@@ -263,6 +296,17 @@ void Save() {
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
+    }
+    std::fprintf(file, "filter=%s\n",
+                 v.retro_filter > 0 ? BbFilters::All[v.retro_filter - 1].key : "off");
+    for (int f = 0; f < BbFilters::Count; ++f) {
+        const auto& filter = BbFilters::All[f];
+        for (int k = 0; k < filter.param_count; ++k) {
+            const float value = v.filter_params[f][k];
+            if (value != filter.params[k].def) {
+                std::fprintf(file, "filter.%s.%s=%g\n", filter.key, filter.params[k].key, value);
+            }
+        }
     }
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nrender_res=%dx%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res],

@@ -1,0 +1,181 @@
+#version 450
+// bbport: compute port of the libretro shader crt/shaders/torridgristle/ScanlineSimple.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+// CRT-torridgristle - ScanlineSimple pass
+// license: public domain
+
+// Parameter lines go here:
+
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+// CRT-torridgristle - ScanlineSimple pass
+// license: public domain
+
+// Parameter lines go here:
+#pragma parameter ScanlineSize "Scanline Size" 3.0 2.0 32.0 1.0
+#pragma parameter YIQAmount "YIQ Amount" 1.0 0.0 1.0 0.05
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+
+vec4 _oPosition1; 
+
+
+
+
+
+
+
+// compatibility #defines
+#define vTexCoord TEX0.xy
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    TEX0.xy = TexCoord.xy;
+}
+
+
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+#ifdef PARAMETER_UNIFORM
+uniform COMPAT_PRECISION float ScanlineSize, YIQAmount;
+#else
+#define ScanlineSize 3.0
+#define YIQAmount 1.0
+#endif
+
+#define Pi 3.1415926536
+const mat3 RGB_to_YIQ = mat3( 0.299 , 0.595716 , 0.211456 ,	0.587    , -0.274453 , -0.522591 ,		0.114    , -0.321263 , 0.311135 );
+const mat3 YIQ_to_RGB =   mat3( 1.0   , 1.0      , 1.0      ,	0.9563   , -0.2721   , -1.1070   ,		0.6210   , -0.6474   , 1.7046   );
+
+void shader_main()
+{
+	vec3 Picture = COMPAT_TEXTURE(Source,vTexCoord).xyz;
+    
+    float HSBrightness = max(max(Picture.x,Picture.y),max(Picture.y,Picture.z));
+    float YIQLuminance = ((0.299*Picture.x) + (0.587*Picture.y) + (0.114*Picture.z));
+    
+    float HSBYIQHybrid = mix(HSBrightness,YIQLuminance,HSBrightness);
+    
+	float Scanline = mod((vTexCoord.y * TextureSize.y / InputSize.y)*OutputSize.y,ScanlineSize)/ScanlineSize;
+    Scanline = 1.-abs(Scanline-0.5)*2.;
+    Scanline = 1.-pow(1.-Scanline,2.0);
+    
+    Scanline = clamp(sqrt(Scanline)-(1.0-HSBYIQHybrid),0.0,1.0);
+    Scanline /= HSBYIQHybrid;
+
+
+
+    vec3 YIQApplication = Picture * RGB_to_YIQ;
+         YIQApplication.x *= Scanline;
+         YIQApplication *= YIQ_to_RGB;
+
+    FragColor = vec4(mix(Picture*Scanline,YIQApplication*mix(Scanline,1.0,0.75),YIQAmount),1.0);
+    //FragColor = vec4(Picture,1.0);
+    //FragColor = vec4(Scanline);
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

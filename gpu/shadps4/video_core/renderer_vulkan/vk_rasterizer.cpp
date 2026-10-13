@@ -272,7 +272,10 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         camera_motion->OnGBufferPass(db_desc.first);
     }
     if (upscaler->Enabled() && cb_descs[0].first) {
-        upscaler->OnColorTarget(cb_descs[0].first);
+        // The game may store this target blue-first (CB component swap); its display pass
+        // swaps back. The filters must read and write in the same order.
+        upscaler->OnColorTarget(cb_descs[0].first,
+                                Regs().color_buffers[0].Swizzle().r == AmdGpu::CompSwizzle::Blue);
     }
     // bbport: scene color: a full-size RGBA16F target drawn with the scene depth.
     if (upscaler->Enabled() && db_desc.first && db_desc.first == camera_motion->Depth() &&

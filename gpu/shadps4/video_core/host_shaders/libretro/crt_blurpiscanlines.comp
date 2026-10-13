@@ -1,0 +1,181 @@
+#version 450
+// bbport: compute port of the libretro shader crt/shaders/crt-blurPiScanlines.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+
+
+
+
+*/
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+
+/*
+
+- crt-blurPi slang shader -
+
+Looks good on low res screens (640 x 480 or less), providing screen space scanlines.
+Works great for anbernic handheld devices.
+
+Made by Oriol Ferrer Mesià (armadillu)
+http://uri.cat
+
+MIT license
+*/
+
+
+/////////////////////////////////////////////////////////////////////////////////////////
+#pragma stage vertex
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+#pragma name crt-blurPi
+#pragma parameter scanlineGain 		"scanlineGain" 		0.15 	0.0 	1.0 	0.05
+#pragma parameter scanlineVertical 	"scanlineVertical" 	0.0 	0.0 	1.0 	1.0
+
+
+
+vec4 COL0;
+
+
+
+
+
+
+
+void vertex_main(){
+    bbport_position = VertexCoord.x * MVPMatrix[0] + VertexCoord.y * MVPMatrix[1] + VertexCoord.z * MVPMatrix[2] + VertexCoord.w * MVPMatrix[3];
+    TEX0.xy = TexCoord.xy;
+}
+	
+/////////////////////////////////////////////////////////////////////////////////////////
+#pragma stage fragment
+/////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+#ifdef PARAMETER_UNIFORM
+#define scanlineGain (bbport_param[0])
+#define scanlineVertical (bbport_param[1])
+#else
+#define scanlineGain 0.3
+#define scanlineVertical 0.0
+#endif
+
+void shader_main(){
+
+	float texCN;
+	float scanLine;	
+	if(scanlineVertical > 0.5){
+	 	//y tex coods so that screen maps exactly to [0..1]
+ 		texCN = TEX0.x * TextureSize.x / InputSize.x;
+ 		scanLine = mod(texCN * OutputSize.x * 0.5, 1.0);
+ 	}else{
+ 		//y tex coods so that screen maps exactly to [0..1]
+ 		texCN = TEX0.y * TextureSize.y / InputSize.y;
+ 		scanLine = mod(texCN * OutputSize.y * 0.5, 1.0);
+ 	}
+	scanLine = (scanLine > 0.5) ? 1.0 + 0.1 * scanlineGain : 1.0 - scanlineGain * 0.50;
+	vec3 color = COMPAT_TEXTURE(Texture, TEX0.xy).rgb;
+    FragColor = vec4( color * scanLine, 1.0 );
+    
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

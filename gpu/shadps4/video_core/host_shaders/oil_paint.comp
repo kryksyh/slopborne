@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: oil paint: a Kuwahara filter (each pixel takes the mean of the least varied of the
+// four quadrants around it) on the scene pixels, canvas weave, optional outlines.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+void main() {
+    if (!begin_pixel()) return;
+    int radius = int(knobs[0] + 0.5);
+    float saturation = knobs[1], canvas = knobs[2];
+    bool outlines = knobs[3] > 0.5;
+    vec3 best_mean = scene_color(scene_px);
+    float best_variance = 1e9;
+    const ivec2 corners[4] = ivec2[4](ivec2(-1, -1), ivec2(1, -1), ivec2(-1, 1), ivec2(1, 1));
+    for (int q = 0; q < 4; ++q) {
+        vec3 sum = vec3(0.0), sum2 = vec3(0.0);
+        for (int y = 0; y <= radius; ++y) {
+            for (int x = 0; x <= radius; ++x) {
+                vec3 c = scene_color(scene_px + corners[q] * ivec2(x, y));
+                sum += c;
+                sum2 += c * c;
+            }
+        }
+        float n = float((radius + 1) * (radius + 1));
+        vec3 mean = sum / n;
+        vec3 variance = sum2 / n - mean * mean;
+        float v = variance.r + variance.g + variance.b;
+        if (v < best_variance) {
+            best_variance = v;
+            best_mean = mean;
+        }
+    }
+    vec3 color = mix(vec3(luma(best_mean)), best_mean, saturation);
+    // Canvas weave in output pixels.
+    vec2 w = vec2(out_pixel) / 3.0;
+    float weave = 0.5 + 0.5 * sin(w.x * 3.1416) * sin(w.y * 3.1416);
+    color *= 1.0 - canvas * 0.12 * weave;
+    if (outlines && depth_edge(scene_px, 1.0, 1) > 0.5) color *= 0.25;
+    finish(color);
+}

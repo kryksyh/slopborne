@@ -1,0 +1,46 @@
+CRT: Lottes|crt/shaders/crt-lottes.glsl
+CRT: Lottes mini|crt/shaders/crt-lottes-mini.glsl
+CRT: Hyllian fast|crt/shaders/hyllian/crt-hyllian-fast.glsl
+CRT: Hyllian 3D|crt/shaders/hyllian/crt-hyllian-3d.glsl
+CRT: Guest SM|crt/shaders/guest/crt-guest-sm.glsl
+CRT: GDV mini|crt/shaders/crt-gdv-mini.glsl
+CRT: Caligari|crt/shaders/crt-caligari.glsl
+CRT: Geom mini|crt/shaders/crt-geom-mini.glsl
+CRT: fake Geom|crt/shaders/fake-CRT-Geom.glsl
+CRT: Nobody|crt/shaders/crt-nobody.glsl
+CRT: blurPi scanlines|crt/shaders/crt-blurPiScanlines.glsl
+CRT: zfast|crt/shaders/zfast_crt.glsl
+CRT: zfast curved|crt/shaders/zfast_crt_geo.glsl
+CRT: zfast composite|crt/shaders/zfast_crt_composite.glsl
+CRT: zfast curved S-Video|crt/shaders/zfast_crt_geo_svideo.glsl
+Scanlines: fract|scanlines/shaders/scanline-fract.glsl
+Scanlines: sine|scanlines/shaders/scanlines-sine-abs.glsl
+Scanlines: resolution independent|scanlines/shaders/res-independent-scanlines.glsl
+Scanlines: broadcast|scanlines/shaders/broadcast.glsl
+Scanlines: simple|crt/shaders/torridgristle/ScanlineSimple.glsl
+Scanlines: interpolated|crt/shaders/torridgristle/Scanline-Interpolation.glsl
+Scanlines: sharp bilinear|interpolation/shaders/sharp-bilinear-scanlines.glsl
+Handheld: dot matrix|handheld/shaders/dot.glsl
+Handheld: LCD 3x|handheld/shaders/lcd3x.glsl
+Handheld: LCD 1x|handheld/shaders/lcd1x.glsl
+Handheld: SameBoy LCD|handheld/shaders/sameboy-lcd.glsl
+Handheld: zfast LCD|handheld/shaders/zfast_lcd.glsl
+Handheld: retro v2|handheld/shaders/retro-v2.glsl
+Handheld: bevel|handheld/shaders/bevel.glsl
+Handheld colors: GBA|handheld/shaders/color/gba-color.glsl
+Handheld colors: GBC|handheld/shaders/color/gbc-color.glsl
+Handheld colors: NDS|handheld/shaders/color/nds-color.glsl
+Handheld colors: PSP|handheld/shaders/color/psp-color.glsl
+Pixels: sharp bilinear|interpolation/shaders/sharp-bilinear.glsl
+Pixels: sharp bilinear simple|interpolation/shaders/sharp-bilinear-simple.glsl
+Pixels: pixel art AA|interpolation/shaders/pixel_art_AA.glsl
+Pixels: AANN|interpolation/shaders/aann.glsl
+Dither: Bayer 8x8|dithering/shaders/bayer-matrix-dithering.glsl
+Dither: simple|dithering/shaders/simple_dither.glsl
+Dither: gendither|dithering/shaders/gendither.glsl
+Print: CMYK halftone|misc/shaders/cmyk-halftone-dot.glsl
+Color: mangler|misc/shaders/color-mangler.glsl
+Color: grade|misc/shaders/grade-no-LUT.glsl
+Video: interlacing|misc/shaders/interlacing.glsl
+Sharpen: adaptive|sharpen/shaders/adaptive-sharpen.glsl
+Sharpen: fast|sharpen/shaders/fast-sharpen.glsl

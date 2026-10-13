@@ -1,0 +1,177 @@
+#version 450
+// bbport: compute port of the libretro shader handheld/shaders/lcd1x.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+
+
+
+
+
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+   lcd1x shader
+
+   A slightly tweaked version of lcd3x, original code written by Gigaherz
+   and released into the public domain:
+
+   > Omits LCD 'colour seperation' effect
+
+   > Has 'properly' aligned scanlines
+
+   Edited by jdgleaver
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by the Free
+   Software Foundation; either version 2 of the License, or (at your option)
+   any later version.
+*/
+
+#pragma parameter BRIGHTEN_SCANLINES "Brighten Scanlines" 16.0 1.0 32.0 0.5
+#pragma parameter BRIGHTEN_LCD "Brighten LCD" 4.0 1.0 12.0 0.1
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+
+
+
+
+/*
+   VERTEX_SHADER
+*/
+void vertex_main()
+{
+   TEX0 = TexCoord * 1.0001;
+   bbport_position = MVPMatrix * VertexCoord;
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+
+precision highp int;
+
+#else
+
+#endif
+
+
+
+#ifdef PARAMETER_UNIFORM
+// All parameter floats need to have COMPAT_PRECISION in front of them
+#define BRIGHTEN_SCANLINES (bbport_param[0])
+#define BRIGHTEN_LCD (bbport_param[1])
+#else
+#define BRIGHTEN_SCANLINES 16.0
+#define BRIGHTEN_LCD 4.0
+#endif
+
+// Magic Numbers
+#define PI 3.141592654
+
+/*
+   FRAGMENT SHADER
+*/
+void shader_main()
+{
+   // Generate LCD grid effect
+   // > Note the 0.25 pixel offset -> required to ensure that
+   //   scanlines occur *between* pixels
+   COMPAT_PRECISION vec2 angle =
+      2.0 * PI * ((TEX0.xy * OrigInputSize * TextureSize / InputSize) - 0.25);
+
+   COMPAT_PRECISION float yfactor = (BRIGHTEN_SCANLINES + sin(angle.y)) / (BRIGHTEN_SCANLINES + 1.0);
+   COMPAT_PRECISION float xfactor = (BRIGHTEN_LCD + sin(angle.x)) / (BRIGHTEN_LCD + 1.0);
+
+   // Get colour sample
+   COMPAT_PRECISION vec3 colour = COMPAT_TEXTURE(Texture, TEX0.xy).rgb;
+
+   // Apply LCD grid effect
+   colour.rgb = yfactor * xfactor * colour.rgb;
+
+   FragColor = vec4(colour.rgb, 1.0);
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

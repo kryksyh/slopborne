@@ -1,0 +1,39 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: watercolor: a soft, slightly displaced wash of the scene, lightened toward the
+// paper, pigment pooling at color edges, paper grain.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+vec3 wash(vec2 pos, float softness) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 12; ++i) {
+        float a = float(i) * 2.39996; // golden angle
+        float r = softness * sqrt((float(i) + 0.5) / 12.0);
+        sum += scene_sample(pos + vec2(cos(a), sin(a)) * r);
+    }
+    return sum / 12.0;
+}
+
+void main() {
+    if (!begin_pixel()) return;
+    float softness = knobs[0], edges = knobs[1], grain = knobs[2], saturation = knobs[3];
+    float bleed = knobs[4];
+    // Bleed: the wash is pushed around by a slow noise field.
+    vec2 field = vec2(hash12(floor(scene_pos / 6.0)), hash12(floor(scene_pos / 6.0) + 7.3)) - 0.5;
+    vec2 pos = scene_pos + field * bleed * 3.0;
+    vec3 color = wash(pos, softness);
+    // Pigment pools where the wash changes: darker rims around shapes.
+    float l = luma(color);
+    float gx = luma(wash(pos + vec2(1.5, 0.0), softness)) - luma(wash(pos - vec2(1.5, 0.0), softness));
+    float gy = luma(wash(pos + vec2(0.0, 1.5), softness)) - luma(wash(pos - vec2(0.0, 1.5), softness));
+    float rim = clamp(length(vec2(gx, gy)) * 6.0, 0.0, 1.0) * edges;
+    color = pow(clamp(color * 1.5, 0.0, 1.0), vec3(0.8));
+    color = mix(vec3(luma(color)), color, saturation);
+    color = mix(color, vec3(0.97, 0.95, 0.9), 0.18); // paper shows through
+    color *= 1.0 - rim * 0.35;
+    float paper = hash12(floor(vec2(out_pixel) / 2.0)) * 0.6 + hash12(vec2(out_pixel)) * 0.4;
+    color *= 1.0 - grain * 0.1 * paper;
+    finish(color);
+}

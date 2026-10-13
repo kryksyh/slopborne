@@ -1,0 +1,42 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: Victorian engraving: parallel lines whose thickness follows the tone (drawn at the
+// output resolution, anti-aliased), cross-hatching in the shadows, depth outlines, two-tone
+// ink. The lines can follow the camera's turn like the Obra Dinn dither.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+// Ink coverage of one family of lines: `spacing` output pixels apart, `darkness` 0..1 of the
+// period inked.
+float lines(vec2 pos, float angle, float spacing, float darkness) {
+    vec2 dir = vec2(cos(angle), sin(angle));
+    float u = dot(pos, vec2(-dir.y, dir.x)) / spacing;
+    float distance = abs(fract(u) - 0.5) * spacing;
+    float half_width = darkness * 0.5 * spacing;
+    return clamp(half_width - distance + 0.5, 0.0, 1.0);
+}
+
+void main() {
+    if (!begin_pixel()) return;
+    int palette = int(knobs[0] + 0.5);
+    float spacing = knobs[1] * pixel_scale(), angle = radians(knobs[2]);
+    bool cross_hatch = knobs[3] > 0.5, stable = knobs[4] > 0.5, outlines = knobs[5] > 0.5;
+    float contrast = knobs[6];
+    float tone = pow(local_tone(scene_px, 0.4, true), contrast);
+    float darkness = 1.0 - tone;
+    vec2 pos = vec2(out_pixel) + (stable ? camera_offset() * pixel_scale() : vec2(0.0));
+    float ink = lines(pos, angle, spacing, clamp(darkness * 1.1 - 0.05, 0.0, 0.92));
+    if (cross_hatch && darkness > 0.55) {
+        ink = max(ink, lines(pos, angle + 1.5708, spacing, (darkness - 0.55) * 1.6));
+    }
+    if (outlines && depth_edge(scene_px, 1.0, 1) > 0.5) ink = 1.0;
+    vec3 ink_color, paper;
+    if (palette == 1) { ink_color = vec3(0.07); paper = vec3(0.96, 0.95, 0.92); }
+    else if (palette == 2) { ink_color = vec3(0.1, 0.27, 0.17); paper = vec3(0.9, 0.93, 0.85); }
+    else if (palette == 3) { ink_color = vec3(0.95); paper = vec3(0.03); }
+    else { ink_color = vec3(0.24, 0.14, 0.07); paper = vec3(0.93, 0.86, 0.7); }
+    // Paper fibres.
+    paper *= 1.0 - 0.06 * hash12(floor(vec2(out_pixel) / 2.0));
+    finish(mix(paper, ink_color, ink));
+}

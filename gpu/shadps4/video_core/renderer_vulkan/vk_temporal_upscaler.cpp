@@ -6,6 +6,7 @@
 #include "video_core/renderer_vulkan/ui_composition.h"
 
 #include <algorithm>
+#include <string_view>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,19 @@
 #include "video_core/host_shaders/upscale_reactive_comp.h"
 #include "video_core/host_shaders/taa_comp.h"
 #include "video_core/host_shaders/taa_sharpen_comp.h"
+#include "video_core/renderer_vulkan/vk_retro_shaders.inc"
+#include "video_core/host_shaders/cel_shade_comp.h"
+#include "video_core/host_shaders/obra_dinn_comp.h"
+#include "video_core/host_shaders/sin_city_comp.h"
+#include "video_core/host_shaders/engraving_comp.h"
+#include "video_core/host_shaders/pencil_comp.h"
+#include "video_core/host_shaders/oil_paint_comp.h"
+#include "video_core/host_shaders/watercolor_comp.h"
+#include "video_core/host_shaders/ascii_art_comp.h"
+#include "video_core/host_shaders/datamosh_comp.h"
+#include "video_core/host_shaders/vision_comp.h"
+#include "video_core/host_shaders/edge_lines_comp.h"
+#include "video_core/host_shaders/tilt_shift_comp.h"
 #include "video_core/host_shaders/taa_sharpen_ldr_comp.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_camera_motion.h"
@@ -193,6 +207,13 @@ TemporalUpscaler::TemporalUpscaler(const Instance& instance_, Scheduler& schedul
     // Explicit resolution overrides retain the old compatibility path. Normal presets
     // keep guest allocations/UI native and change only host raster targets at frame boundaries.
     scaled_session = std::getenv("BB_RENDER_RES") && std::getenv("BB_RENDER_RES")[0];
+    // Upscaler off (or TAA) in a patched session: the launcher patched it for a picture filter
+    // (a reduced size, or native size a hair smaller): plain bilinear scaling all session.
+    filter_session = scaled_session &&
+                     (BbSettings::Get().upscaler == BbSettings::UpscalerOff ||
+                      BbSettings::Get().upscaler == BbSettings::UpscalerTaa) &&
+                     std::getenv("BB_OUTPUT_RES") &&
+                     std::string_view(std::getenv("BB_OUTPUT_RES")) != std::getenv("BB_RENDER_RES");
     render_width = 1920;
     render_height = 1080;
     if (const char* res = std::getenv("BB_RENDER_RES")) {
@@ -382,7 +403,7 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     // DLSS and MetalFX, like FSR 4, have their own context: no portable FSR 3 context is made.
     const bool use_fsr4 = UseFsr4() || UseDlss() || UseMetalFx() || UseStretch();
-    const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
+    const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa && !UseStretch();
     if (use_taa && (w != ow || h != oh)) {
         std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
         return false;
@@ -619,6 +640,33 @@ void TemporalUpscaler::CreatePipelines() {
     taa_sharpen_pipeline = compute(TAA_SHARPEN_COMP, *taa_sharpen_pipeline_layout);
     taa_sharpen_ldr_pipeline = compute(TAA_SHARPEN_LDR_COMP, *taa_sharpen_pipeline_layout);
     {
+        const std::array<vk::DescriptorSetLayoutBinding, 5> bindings{{
+            {.binding = 0, .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 2, .descriptorType = vk::DescriptorType::eSampledImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 3, .descriptorType = vk::DescriptorType::eSampledImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute},
+            {.binding = 4, .descriptorType = vk::DescriptorType::eStorageImage,
+             .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute}}};
+        retro_desc_layout = Check(device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = u32(bindings.size()), .pBindings = bindings.data()}));
+        const vk::PushConstantRange push{.stageFlags = vk::ShaderStageFlagBits::eCompute,
+                                         .offset = 0, .size = 52 * sizeof(u32)};
+        retro_pipeline_layout = Check(device.createPipelineLayoutUnique({
+            .setLayoutCount = 1, .pSetLayouts = &*retro_desc_layout,
+            .pushConstantRangeCount = 1, .pPushConstantRanges = &push}));
+        retro_sampler = Check(device.createSamplerUnique({
+            .magFilter = vk::Filter::eLinear, .minFilter = vk::Filter::eLinear,
+            .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge}));
+        retro_pipelines.resize(BbFilters::Count);
+    }
+    {
         std::array<vk::DescriptorSetLayoutBinding, 7> bindings{};
         for (u32 i = 0; i < bindings.size(); ++i) {
             bindings[i] = {.binding = i,
@@ -739,13 +787,8 @@ void TemporalUpscaler::RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color,
     taa_next = 1 - taa_next;
 }
 
-void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
-                                    u32 h) {
-    const auto& settings = BbSettings::Get();
-    const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - 1.0f;
-    if (!settings.sharpen || extra <= 0.0f) {
-        return;
-    }
+vk::ImageView TemporalUpscaler::CopyForFilter(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr,
+                                              u32 w, u32 h) {
     const auto device = instance.GetDevice();
     if (extra_sharpen_width != w || extra_sharpen_height != h) {
         // Retired command buffers may still read the old copy. `cmdbuf` stays open.
@@ -811,6 +854,17 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
     image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
                   vk::AccessFlagBits2::eTransferRead, vk::PipelineStageFlagBits2::eComputeShader,
                   vk::AccessFlagBits2::eShaderStorageWrite);
+    return target_view;
+}
+
+void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w,
+                                    u32 h) {
+    const auto& settings = BbSettings::Get();
+    const float extra = std::clamp(settings.sharpness.load(), 0.0f, 2.0f) - 1.0f;
+    if (!settings.sharpen || extra <= 0.0f) {
+        return;
+    }
+    const vk::ImageView target_view = CopyForFilter(cmdbuf, target, ldr, w, h);
     const std::array<vk::DescriptorImageInfo, 2> infos{{
         {.imageView = *extra_sharpen_view, .imageLayout = vk::ImageLayout::eGeneral},
         {.imageView = target_view, .imageLayout = vk::ImageLayout::eGeneral}}};
@@ -825,8 +879,189 @@ void TemporalUpscaler::ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, 
     cmdbuf.pushConstants(*taa_sharpen_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
                          sizeof(extra), &extra);
     cmdbuf.dispatch((w + 7) / 8, (h + 7) / 8, 1);
-    image_barrier(target, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eComputeShader,
-                  vk::AccessFlagBits2::eShaderStorageWrite, all, rw);
+    const vk::ImageMemoryBarrier2 done{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+        .oldLayout = vk::ImageLayout::eGeneral, .newLayout = vk::ImageLayout::eGeneral,
+        .image = target, .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &done});
+}
+
+void TemporalUpscaler::RetroFilter(vk::CommandBuffer cmdbuf, vk::ImageView source,
+                                   vk::ImageView depth, u32 iw, u32 ih, u32 w, u32 h, u32 ow,
+                                   u32 oh) {
+    int filter = BbSettings::Get().retro_filter - 1;
+    // Diagnostic: BB_RETRO_CYCLE=<seconds> steps through every filter (screenshot sweeps).
+    static const int cycle = [] {
+        const char* env = std::getenv("BB_RETRO_CYCLE");
+        return env ? std::atoi(env) : 0;
+    }();
+    if (cycle > 0) {
+        const auto now = std::chrono::steady_clock::now().time_since_epoch();
+        static const int from = [] {
+            const char* env = std::getenv("BB_RETRO_CYCLE_FROM");
+            return env ? std::clamp(std::atoi(env), 0, BbFilters::Count - 1) : 0;
+        }();
+        filter = from + int(std::chrono::duration_cast<std::chrono::seconds>(now).count() / cycle %
+                            s64(BbFilters::Count - from));
+        static int shown = -1;
+        if (filter != shown) {
+            shown = filter;
+            std::printf("Retro cycle: %d %s\n", filter + 1, BbFilters::All[filter].name);
+        }
+    }
+    if (filter < 0 || filter >= int(retro_pipelines.size())) {
+        return;
+    }
+    const auto device = instance.GetDevice();
+    auto& pipeline = retro_pipelines[filter];
+    if (!pipeline) {
+        static const std::span<const u32> own_code[BbFilters::OwnCount] = {
+            CEL_SHADE_COMP, OBRA_DINN_COMP, SIN_CITY_COMP,  ENGRAVING_COMP,
+            PENCIL_COMP,    OIL_PAINT_COMP, WATERCOLOR_COMP, ASCII_ART_COMP,
+            DATAMOSH_COMP,  VISION_COMP,    EDGE_LINES_COMP, TILT_SHIFT_COMP};
+        // The libretro filters come first in BbFilters::All, in RetroShaders order.
+        const int own = BbFilters::All[filter].own;
+        const std::span<const u32> code = own < 0 ? RetroShaders[filter] : own_code[own];
+        auto module = Check(device.createShaderModuleUnique(
+            {.codeSize = code.size_bytes(), .pCode = code.data()}));
+        pipeline = Check(device.createComputePipelineUnique(
+            {}, {.stage = {.stage = vk::ShaderStageFlagBits::eCompute, .module = *module,
+                           .pName = "main"},
+                 .layout = *retro_pipeline_layout}));
+    }
+    if (!ui_storage_view) {
+        ui_storage_view = Check(device.createImageViewUnique({
+            .image = vk::Image(ui_image), .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
+    }
+    const auto barrier = [&](vk::PipelineStageFlags2 src, vk::AccessFlags2 src_access,
+                             vk::PipelineStageFlags2 dst, vk::AccessFlags2 dst_access) {
+        const vk::ImageMemoryBarrier2 b{
+            .srcStageMask = src, .srcAccessMask = src_access,
+            .dstStageMask = dst, .dstAccessMask = dst_access,
+            .oldLayout = vk::ImageLayout::eGeneral, .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(ui_image),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &b});
+    };
+    const auto all = vk::PipelineStageFlagBits2::eAllCommands;
+    const auto rw = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite;
+    barrier(all, rw, vk::PipelineStageFlagBits2::eComputeShader,
+            vk::AccessFlagBits2::eShaderStorageWrite);
+    const vk::DescriptorImageInfo source_info{.sampler = *retro_sampler, .imageView = source,
+                                              .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo target_info{.imageView = *ui_storage_view,
+                                              .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo depth_info{.imageView = depth,
+                                             .imageLayout = vk::ImageLayout::eGeneral};
+    // Datamosh smears its previous output along the motion vectors: a history image of the
+    // output size, refreshed from the result after every dispatch.
+    const bool datamosh = BbFilters::All[filter].own == BbFilters::OwnDatamosh;
+    if (datamosh && (retro_history_width != ow || retro_history_height != oh)) {
+        scheduler.WaitSubmitted();
+        retro_history_view.reset();
+        retro_history = VideoCore::UniqueImage(device, instance.GetAllocator());
+        retro_history.Create(vk::ImageCreateInfo{
+            .imageType = vk::ImageType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .extent = {ow, oh, 1},
+            .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        });
+        retro_history_view = Check(device.createImageViewUnique({
+            .image = vk::Image(retro_history), .viewType = vk::ImageViewType::e2D,
+            .format = vk::Format::eR8G8B8A8Unorm,
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}}));
+        retro_history_width = ow;
+        retro_history_height = oh;
+        retro_history_fresh = true;
+        const vk::ImageMemoryBarrier2 init{
+            .srcStageMask = all, .srcAccessMask = vk::AccessFlagBits2::eNone,
+            .dstStageMask = all, .dstAccessMask = rw,
+            .oldLayout = vk::ImageLayout::eUndefined, .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(retro_history),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &init});
+    }
+    const vk::DescriptorImageInfo motion_info{.imageView = *motion_view,
+                                              .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo history_info{
+        .imageView = datamosh ? *retro_history_view : vk::ImageView{},
+        .imageLayout = vk::ImageLayout::eGeneral};
+    std::array<vk::WriteDescriptorSet, 5> writes{{
+        {.dstBinding = 0, .descriptorCount = 1,
+         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &source_info},
+        {.dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .pImageInfo = &target_info},
+        {.dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampledImage,
+         .pImageInfo = &depth_info},
+        {.dstBinding = 3, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampledImage,
+         .pImageInfo = &motion_info},
+        {.dstBinding = 4, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .pImageInfo = &history_info}}};
+    // libretro's OutputSize, TextureSize (the whole image), InputSize (the scene in it), then
+    // the filter's knobs; the port's own filters also read the camera and its projection.
+    struct {
+        float output[2], texture[2], input[2];
+        s32 frame_count, frame_direction;
+        float knobs[BbFilters::MaxParams];
+        float view_to_world[12];
+        float projection[4];
+        float flags[4];
+    } params{{float(ow), float(oh)}, {float(iw), float(ih)}, {float(w), float(h)},
+             s32(retro_frame++), 1, {}, {}, {}, {}};
+    for (int k = 0; k < BbFilters::All[filter].param_count; ++k) {
+        params.knobs[k] = BbSettings::Get().filter_params[filter][k];
+    }
+    std::array<float, 12> inv_view{};
+    std::array<float, 4> projection{};
+    if (camera_motion.ViewToWorld(inv_view, projection)) {
+        std::copy(inv_view.begin(), inv_view.end(), params.view_to_world);
+        std::copy(projection.begin(), projection.end(), params.projection);
+        params.flags[0] = 1.0f;
+    }
+    params.flags[1] = datamosh && retro_history_fresh ? 1.0f : 0.0f;
+    static bool formats_logged = false;
+    if (!formats_logged) {
+        formats_logged = true;
+        std::printf("Filters: UI image %s, scene %ux%u in %ux%u, blue first %d\n",
+                    vk::to_string(ui_format).c_str(), w, h, iw, ih, int(ldr_blue_first));
+    }
+    // The scene target stores the game's colors blue-first: swap on read and on write.
+    params.flags[2] = ldr_blue_first ? 1.0f : 0.0f;
+    retro_history_fresh = retro_history_fresh && !datamosh;
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *retro_pipeline_layout, 0,
+                                std::span(writes.data(), datamosh ? 5 : 4));
+    cmdbuf.pushConstants(*retro_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
+                         sizeof(params), &params);
+    cmdbuf.dispatch((ow + 7) / 8, (oh + 7) / 8, 1);
+    barrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
+            all, rw);
+    if (datamosh) {
+        const vk::ImageBlit region{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .srcOffsets = std::array{vk::Offset3D{}, vk::Offset3D{s32(ow), s32(oh), 1}},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstOffsets = std::array{vk::Offset3D{}, vk::Offset3D{s32(ow), s32(oh), 1}},
+        };
+        cmdbuf.blitImage(vk::Image(ui_image), vk::ImageLayout::eGeneral, vk::Image(retro_history),
+                         vk::ImageLayout::eGeneral, region, vk::Filter::eNearest);
+        const vk::ImageMemoryBarrier2 copied{
+            .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = all, .dstAccessMask = rw,
+            .oldLayout = vk::ImageLayout::eGeneral, .newLayout = vk::ImageLayout::eGeneral,
+            .image = vk::Image(retro_history),
+            .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &copied});
+    }
 }
 
 void TemporalUpscaler::OnBlendedSceneDraw() {
@@ -1301,7 +1536,7 @@ bool TemporalUpscaler::Scaled() const {
     return scaled_session || target_width != 1920 || target_height != 1080;
 }
 
-void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
+void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color, bool blue_first) {
     if (ui_phase || !camera_motion.Depth()) {
         return;
     }
@@ -1311,6 +1546,7 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
         image.info.size.width == depth.info.size.width &&
         image.info.size.height == depth.info.size.height) {
         ldr_target = color;
+        ldr_blue_first = blue_first;
     }
 }
 
@@ -1642,6 +1878,7 @@ void TemporalUpscaler::RunScaled() {
         };
         cmdbuf.blitImage(color_image, vk::ImageLayout::eGeneral, vk::Image(ui_image),
                          vk::ImageLayout::eGeneral, region, vk::Filter::eLinear);
+        RetroFilter(cmdbuf, color_view, depth_view, source_width, source_height, w, h, ow, oh);
         barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite,
                 vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -1703,6 +1940,7 @@ void TemporalUpscaler::RunScaled() {
             cmdbuf.blitImage(vk::Image(output_image), vk::ImageLayout::eGeneral,
                              vk::Image(ui_image), vk::ImageLayout::eGeneral, region,
                              vk::Filter::eNearest);
+            RetroFilter(cmdbuf, color_view, depth_view, source_width, source_height, w, h, ow, oh);
             barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor,
                     vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
                     vk::AccessFlagBits2::eTransferWrite, vk::ImageLayout::eGeneral,
@@ -1801,6 +2039,7 @@ void TemporalUpscaler::RunScaled() {
         reset = false;
         dispatched_last_frame = true;
         ExtraSharpen(cmdbuf, vk::Image(ui_image), true, ow, oh);
+        RetroFilter(cmdbuf, color_view, depth_view, source_width, source_height, w, h, ow, oh);
     }
     barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
             rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
@@ -2082,7 +2321,8 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
 }
 
 bool TemporalUpscaler::UseStretch() const {
-    return BbSettings::Get().upscaler == BbSettings::UpscalerStretch && scaled_session;
+    return scaled_session &&
+           (BbSettings::Get().upscaler == BbSettings::UpscalerStretch || filter_session);
 }
 
 bool TemporalUpscaler::UseMetalFx() const {

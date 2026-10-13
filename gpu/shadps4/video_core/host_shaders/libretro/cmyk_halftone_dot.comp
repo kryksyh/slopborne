@@ -1,0 +1,202 @@
+#version 450
+// bbport: compute port of the libretro shader misc/shaders/cmyk-halftone-dot.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+
+
+
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+CMYK Halftone Dot Shader
+
+Adapted from Stefan Gustavson's GLSL shader demo for WebGL:
+http://webstaff.itn.liu.se/~stegu/OpenGLinsights/shadertutorial.html
+
+Ported to RetroArch by hunterk
+
+This shader is licensed in the public domain, as per S. Gustavson's original license.
+Note: the MIT-licensed noise functions have been purposely removed.
+*/
+
+#pragma parameter frequency "CMYK HalfTone Dot Density" 225.0 25.0 700.0 25.0
+#define mul(a,b) (b*a)
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+
+vec4 _oPosition1; 
+
+
+
+
+
+
+
+// compatibility #defines
+#define vTexCoord TEX0.xy
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    TEX0.xy = TexCoord.xy;
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+#ifdef PARAMETER_UNIFORM
+#define frequency (bbport_param[0])
+#else
+#define frequency 550.0 // controls the density of the dot pattern
+#endif
+
+void shader_main()
+{
+	// Distance to nearest point in a grid of
+	// (frequency x frequency) points over the unit square
+	mat2 rotation_matrix = mat2(0.707, 0.707, -0.707, 0.707);
+	vec2 st2 = mul(rotation_matrix , vTexCoord);
+	vec2 nearest = 2.0 * fract(frequency * st2) - 1.0;
+	float dist = length(nearest);
+	vec3 texcolor = COMPAT_TEXTURE(Source, vTexCoord).rgb; // Unrotated coords
+	vec3 black = texcolor; // kinda cheating, but it makes the colors look much better
+
+	// Perform a rough RGB-to-CMYK conversion
+	vec4 cmyk;
+	cmyk.xyz = 1.0 - texcolor;
+	cmyk.w = min(cmyk.x, min(cmyk.y, cmyk.z)); // Create K
+
+	mat2 k_matrix = mat2(0.707, 0.707, -0.707, 0.707);
+	vec2 Kst = frequency * (TextureSize / InputSize) * mul(k_matrix , vTexCoord);
+	vec2 Kuv = 2.0 * fract(Kst) - 1.0;
+	float k = step(0.0, sqrt(cmyk.w) - length(Kuv));
+	mat2 c_matrix = mat2(0.966, 0.259, -0.259, 0.966);
+	vec2 Cst = frequency * (TextureSize / InputSize) * mul(c_matrix , vTexCoord);
+	vec2 Cuv = 2.0 * fract(Cst) - 1.0;
+	float c = step(0.0, sqrt(cmyk.x) - length(Cuv));
+	mat2 m_matrix = mat2(0.966, -0.259, 0.259, 0.966);
+	vec2 Mst = frequency * (TextureSize / InputSize) * mul(m_matrix , vTexCoord);
+	vec2 Muv = 2.0 * fract(Mst) - 1.0;
+	float m = step(0.0, sqrt(cmyk.y) - length(Muv));
+	vec2 Yst = frequency * (TextureSize / InputSize) * vTexCoord; // 0 deg
+	vec2 Yuv = 2.0 * fract(Yst) - 1.0;
+	float y = step(0.0, sqrt(cmyk.z) - length(Yuv));
+
+	vec3 rgbscreen = 1.0 - vec3(c,m,y);
+	rgbscreen = mix(rgbscreen, black, k);
+
+	float afwidth = 2.0 * frequency * length(OutSize.zw);
+	float blend = smoothstep(0.0, 1.0, afwidth);
+	
+	vec4 color = vec4(mix(rgbscreen , texcolor, blend), 1.0);
+	color = (max(texcolor.r, max(texcolor.g, texcolor.b)) < 0.01) ? vec4(0.,0.,0.,0.) : color; // make blacks actually black
+
+	FragColor = color;
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

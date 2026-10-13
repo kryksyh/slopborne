@@ -1,0 +1,243 @@
+#version 450
+// bbport: compute port of the libretro shader handheld/shaders/sameboy-lcd.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+
+
+
+
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+   SameBoy LCD shader
+   Author: LIJI32
+   License: MIT
+
+   Copyright (c) 2015-2016 Lior Halphon
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+*/
+
+#pragma parameter COLOR_LOW "Color Low" 0.8 0.0 1.5 0.05
+#pragma parameter COLOR_HIGH "Color High" 1.0 0.0 1.5 0.05
+#pragma parameter SCANLINE_DEPTH "Scanline Depth" 0.1 0.0 2.0 0.05
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+
+
+
+
+
+
+// compatibility #defines
+#define vTexCoord TEX0.xy
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    TEX0.xy = TexCoord.xy;
+}
+
+
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+
+
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define OutSize vec4(OutputSize, 1.0 / OutputSize)
+
+#ifdef PARAMETER_UNIFORM
+#define COLOR_LOW (bbport_param[0])
+#define COLOR_HIGH (bbport_param[1])
+#define SCANLINE_DEPTH (bbport_param[2])
+#else
+#define COLOR_LOW 0.8
+#define COLOR_HIGH 1.0
+#define SCANLINE_DEPTH 0.1
+#endif
+
+void shader_main()
+{
+    vec2 original_texel = InputSize.xy / (TextureSize.xy * OrigInputSize.xy);
+    vec2 original_coord = vTexCoord / original_texel;
+    vec2 pos = fract(original_coord);
+    vec2 sub_pos = fract(original_coord * 6.0);
+    
+    vec4 center = COMPAT_TEXTURE(Source, vTexCoord);
+    vec4 left = COMPAT_TEXTURE(Source, vTexCoord - vec2(original_texel.x, 0.0));
+    vec4 right = COMPAT_TEXTURE(Source, vTexCoord + vec2(original_texel.x, 0.0));
+    
+    if (pos.y < 1.0 / 6.0) {
+        center = mix(center, COMPAT_TEXTURE(Source, vTexCoord + vec2(0.0, -original_texel.y)), 0.5 - sub_pos.y / 2.0);
+        left =   mix(left,   COMPAT_TEXTURE(Source, vTexCoord + vec2(-original_texel.x, -original_texel.y)), 0.5 - sub_pos.y / 2.0);
+        right =  mix(right,  COMPAT_TEXTURE(Source, vTexCoord + vec2( original_texel.x, -original_texel.y)), 0.5 - sub_pos.y / 2.0);
+        center *= sub_pos.y * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+        left *= sub_pos.y * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+        right *= sub_pos.y * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+    }
+    else if (pos.y > 5.0 / 6.0) {
+        center = mix(center, COMPAT_TEXTURE(Source, vTexCoord + vec2(0.0, original_texel.y)), sub_pos.y / 2.0);
+        left =   mix(left,   COMPAT_TEXTURE(Source, vTexCoord + vec2(-original_texel.x, original_texel.y)), sub_pos.y / 2.0);
+        right =  mix(right,  COMPAT_TEXTURE(Source, vTexCoord + vec2( original_texel.x, original_texel.y)), sub_pos.y / 2.0);
+        center *= (1.0 - sub_pos.y) * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+        left *= (1.0 - sub_pos.y) * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+        right *= (1.0 - sub_pos.y) * SCANLINE_DEPTH + (1.0 - SCANLINE_DEPTH);
+    }
+    
+    
+    vec4 midleft = mix(left, center, 0.5);
+    vec4 midright = mix(right, center, 0.5);
+    
+    vec4 ret;
+    if (pos.x < 1.0 / 6.0) {
+        ret = mix(vec4(COLOR_HIGH * center.r, COLOR_LOW * center.g, COLOR_HIGH * left.b, 1.0),
+                  vec4(COLOR_HIGH * center.r, COLOR_LOW * center.g, COLOR_LOW  * left.b, 1.0),
+                  sub_pos.x);
+    }
+    else if (pos.x < 2.0 / 6.0) {
+        ret = mix(vec4(COLOR_HIGH * center.r, COLOR_LOW  * center.g, COLOR_LOW * left.b, 1.0),
+                  vec4(COLOR_HIGH * center.r, COLOR_HIGH * center.g, COLOR_LOW * midleft.b, 1.0),
+                  sub_pos.x);
+    }
+    else if (pos.x < 3.0 / 6.0) {
+        ret = mix(vec4(COLOR_HIGH * center.r  , COLOR_HIGH * center.g, COLOR_LOW * midleft.b, 1.0),
+                  vec4(COLOR_LOW  * midright.r, COLOR_HIGH * center.g, COLOR_LOW * center.b, 1.0),
+                  sub_pos.x);
+    }
+    else if (pos.x < 4.0 / 6.0) {
+        ret = mix(vec4(COLOR_LOW * midright.r, COLOR_HIGH * center.g , COLOR_LOW  * center.b, 1.0),
+                  vec4(COLOR_LOW * right.r   , COLOR_HIGH  * center.g, COLOR_HIGH * center.b, 1.0),
+                  sub_pos.x);
+    }
+    else if (pos.x < 5.0 / 6.0) {
+        ret = mix(vec4(COLOR_LOW * right.r, COLOR_HIGH * center.g  , COLOR_HIGH * center.b, 1.0),
+                  vec4(COLOR_LOW * right.r, COLOR_LOW  * midright.g, COLOR_HIGH * center.b, 1.0),
+                  sub_pos.x);
+    }
+    else {
+        ret = mix(vec4(COLOR_LOW  * right.r, COLOR_LOW * midright.g, COLOR_HIGH * center.b, 1.0),
+                  vec4(COLOR_HIGH * right.r, COLOR_LOW * right.g  ,  COLOR_HIGH * center.b, 1.0),
+                  sub_pos.x);
+    }
+    
+    FragColor = ret;
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

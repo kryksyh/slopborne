@@ -132,12 +132,25 @@ def output_size(settings):
 RENDER_SIZES={'1600x900':(1600,900),'1280x720':(1280,720),'960x540':(960,540),'640x360':(640,360),'428x240':(428,240)}
 
 
+# A picture filter at native size: the scene a hair smaller than the UI space, so the UI is
+# composed apart from it (see scaled_sizes) and the filter draws between the two.
+FILTER_NATIVE_SIZE=(1916,1078)
+
+
+def filter_on(settings):
+    return settings.get('filter','off') not in ('','off')
+
+
 def menu_render_size(settings):
     """The menu's reduced scene size for the 1080p output (render_res), or None. It is patched at
-    start whatever live_resolution says: host-target scaling misses most of the scene's cost."""
-    if output_size(settings)!=OUTPUT_SIZE or settings.get('upscaler','fsr3') in ('off','taa'):
+    start whatever live_resolution says: host-target scaling misses most of the scene's cost.
+    A Filters-tab filter needs a patched scene too: the reduced size, or FILTER_NATIVE_SIZE."""
+    if output_size(settings)!=OUTPUT_SIZE:
         return None
-    return RENDER_SIZES.get(settings.get('render_res',''))
+    size=RENDER_SIZES.get(settings.get('render_res',''))
+    if settings.get('upscaler','fsr3') in ('off','taa'):
+        return (size or FILTER_NATIVE_SIZE) if filter_on(settings) else None
+    return size or (FILTER_NATIVE_SIZE if filter_on(settings) else None)
 
 
 def scaled_sizes(settings):

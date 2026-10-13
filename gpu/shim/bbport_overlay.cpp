@@ -8,6 +8,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+#include <string>
 #include <cstring>
 #include <mutex>
 #include <string_view>
@@ -432,6 +434,113 @@ void DisplayMenu() {
     ImGui::TextWrapped("%s", T("Visual effects apply after restart."));
 }
 
+// The Filters tab: one picture filter on the scene (the interface stays sharp) and its knobs.
+void FiltersMenu() {
+    auto& s = BbSettings::Get();
+    // Filters draw on the scene before the interface: a patched session (reduced render size,
+    // or native size for a filter), chosen by the launcher at game start.
+    if (s.retro_filter > 0 && !BbSettings::FixedRenderSession() &&
+        s.output_res == BbSettings::OutputDefault) {
+        ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
+                           T("Filters start with the next game start: use Apply and restart below."));
+    } else {
+        ImGui::TextDisabled(T("Scene %d x %d (Display tab: render resolution). Smaller sizes give "
+                              "chunkier pixels."),
+                            BbSettings::Get().active_render_width.load(),
+                            BbSettings::Get().active_render_height.load());
+    }
+    ImGui::SeparatorText(T("Filter"));
+    const int current = s.retro_filter;
+    const auto name_of = [](int index) -> std::string {
+        if (index <= 0) return T("Off");
+        const auto& f = BbFilters::All[index - 1];
+        return std::string(f.group) + ": " + f.name;
+    };
+    if (ImGui::ArrowButton("##previous", ImGuiDir_Left)) {
+        Store(s.retro_filter, (current + BbFilters::Count) % (BbFilters::Count + 1), true);
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+    if (ImGui::BeginCombo("##filter", name_of(current).c_str(), ImGuiComboFlags_HeightLarge)) {
+        if (ImGui::Selectable(T("Off"), current == 0)) Store(s.retro_filter, 0, true);
+        const char* group = "";
+        for (int i = 0; i < BbFilters::Count; ++i) {
+            const auto& f = BbFilters::All[i];
+            if (std::strcmp(group, f.group) != 0) {
+                group = f.group;
+                ImGui::SeparatorText(group);
+            }
+            if (ImGui::Selectable(f.name, current == i + 1)) Store(s.retro_filter, i + 1, true);
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::ArrowButton("##next", ImGuiDir_Right)) {
+        Store(s.retro_filter, (current + 1) % (BbFilters::Count + 1), true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(T("Surprise me"))) {
+        static unsigned seed = 0x9E3779B9u;
+        seed = seed * 1664525u + 1013904223u;
+        Store(s.retro_filter, int(1 + (seed >> 8) % BbFilters::Count), true);
+    }
+    if (current <= 0) {
+        ImGui::TextDisabled("%s", T("No filter."));
+        return;
+    }
+    const int index = current - 1;
+    const auto& filter = BbFilters::All[index];
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", filter.about);
+    ImGui::PopTextWrapPos();
+    if (filter.param_count == 0) {
+        ImGui::TextDisabled("%s", T("This filter has no settings."));
+        return;
+    }
+    ImGui::SeparatorText(T("Settings"));
+    for (int k = 0; k < filter.param_count; ++k) {
+        const auto& param = filter.params[k];
+        auto& value = s.filter_params[index][k];
+        ImGui::PushID(k);
+        float v = value;
+        bool changed = false;
+        if (param.choices) {
+            std::vector<std::string> names;
+            for (std::string_view rest = param.choices; !rest.empty();) {
+                const auto bar = rest.find('|');
+                names.emplace_back(rest.substr(0, bar));
+                rest = bar == std::string_view::npos ? std::string_view{} : rest.substr(bar + 1);
+            }
+            const int choice = std::clamp(int(v + 0.5f), 0, int(names.size()) - 1);
+            if (ImGui::BeginCombo(param.label, names[choice].c_str())) {
+                for (int c = 0; c < int(names.size()); ++c) {
+                    if (ImGui::Selectable(names[c].c_str(), c == choice)) {
+                        v = float(c);
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        } else if (param.min == 0.0f && param.max == 1.0f && param.step == 1.0f) {
+            bool on = v > 0.5f;
+            changed = ImGui::Checkbox(param.label, &on);
+            v = on ? 1.0f : 0.0f;
+        } else {
+            const bool whole = param.step >= 1.0f && param.step == float(int(param.step));
+            changed = ImGui::SliderFloat(param.label, &v, param.min, param.max, whole ? "%.0f" : "%.2f");
+            if (changed && param.step > 0.0f) {
+                v = param.min + std::round((v - param.min) / param.step) * param.step;
+            }
+        }
+        Store(value, std::clamp(v, param.min, param.max), changed);
+        ImGui::PopID();
+    }
+    if (ImGui::Button(T("Reset this filter's settings"))) {
+        BbSettings::ResetFilterParams(index);
+        dirty = true;
+    }
+}
+
 void AdvancedMenu() {
     auto& s = BbSettings::Get();
     ImGui::TextWrapped("%s", T("Rendering experiments and diagnostic views. Leave these unchanged unless testing a specific issue."));
@@ -523,7 +632,10 @@ bool NeedsRestart() {
                    s.model_lod != s.startup_model_lod ||
                    s.live_resolution != s.startup_live_resolution ||
                    s.async_pipelines != s.startup_async_pipelines ||
-                   BbSettings::ResolutionNeedsRestart();
+                   BbSettings::ResolutionNeedsRestart() ||
+                   // A filter needs the scene apart from the UI: a patched session.
+                   (s.retro_filter > 0 && !BbSettings::FixedRenderSession() &&
+                    s.output_res == BbSettings::OutputDefault);
     for (int e = 0; e < BbSettings::EffectCount; ++e) {
         restart |= s.effects[e] != s.startup_effects[e];
     }
@@ -551,9 +663,9 @@ void Menu() {
     ImGui::Text("%.0f FPS  (%.1f ms)", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", T("Game is still running while settings are open."));
     ImGui::TextDisabled("%s", T("Shoulder buttons or Ctrl+Tab: switch page"));
-    static const char* pages[] = {"Display", "Controls", "Gameplay", "Advanced"};
+    static const char* pages[] = {"Display", "Controls", "Gameplay", "Advanced", "Filters"};
     if (ImGui::BeginTabBar("SettingsPages")) {
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             const auto flags = requested_page == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
             ImGui::BeginDisabled(calibrating && i != 1);
             const bool selected = ImGui::BeginTabItem(T(pages[i]), nullptr, flags);
@@ -573,6 +685,7 @@ void Menu() {
                     if (ImGui::CollapsingHeader(T("Cheats (after restart)"))) EffectOptions(EffectPage::Cheats);
                 }
                 if (i == 3) AdvancedMenu();
+                if (i == 4) FiltersMenu();
                 ImGui::PopItemWidth();
             }
             ImGui::EndChild();

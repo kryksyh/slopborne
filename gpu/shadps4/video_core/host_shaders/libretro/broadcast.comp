@@ -1,0 +1,209 @@
+#version 450
+// bbport: compute port of the libretro shader scanlines/shaders/broadcast.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+
+/*
+    This program is free software; you can redistribute it and/or modify it
+    under the terms of the GNU General Public License as published by the Free
+    Software Foundation; either version 2 of the License, or (at your option)
+    any later version.
+*/
+
+#pragma parameter SCAN_STR "SCANLINES STRENGTH" 0.4 0.0 0.5 0.05
+#pragma parameter BEAM_LOW "SCANLINES BEAM LOW" 3.0 0.0 5.0 0.05  
+#pragma parameter BEAM_HIGH "SCANLINES BEAM HIGH" 0.75 0.0 5.0 0.05  
+#pragma parameter COLOR_BOOST "COLOR BOOST (BRIGHTNESS)" 1.5 1.0 5.0 0.05  
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+vec2 ogl2pos;
+vec2 invdims;
+vec2 maskpos;
+vec2 scale;
+
+
+
+
+
+
+
+#ifdef PARAMETER_UNIFORM
+const float m_size = 0.0;
+
+#else
+#define m_size 1.0
+
+#endif
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    TEX0.xy = TexCoord.xy*1.0001;
+    invdims = 1.0/TextureSize;
+    scale = TextureSize/InputSize;
+    maskpos = TEX0.xy*scale*OutputSize.xy;
+    ogl2pos = TEX0.xy*TextureSize;    
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+
+
+
+
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+
+
+
+
+
+#ifdef PARAMETER_UNIFORM
+#define BEAM_LOW (bbport_param[0])
+#define BEAM_HIGH (bbport_param[1])
+#define COLOR_BOOST (bbport_param[2])
+#define SCAN_STR (bbport_param[3])
+#else
+#define BEAM_LOW 4.0
+#define BEAM_HIGH 1.0
+#define COLOR_BOOST 1.0
+#define SCAN_STR 0.5
+#endif
+
+#define GAMMA(color) color*color 
+#define PI 3.14159265358979323846 
+#define TAU 6.2831852
+
+void shader_main()
+{   
+    vec2 dx = vec2(invdims.x*0.5, 0.0);
+    vec2 dy = vec2(0.0,invdims.y*0.5);
+
+    vec2 near = floor(ogl2pos)+0.5;
+    vec2 f = fract(ogl2pos);    
+         f = f*f*(3.0-2.0*f);
+         f.y = f.y*f.y;
+         f.y = f.y*f.y;
+    vec2 pos = (near + f)*invdims;     
+    
+    vec3 res1 = GAMMA(COMPAT_TEXTURE(Source,pos - dy - dx).rgb);
+    vec3 res2 = GAMMA(COMPAT_TEXTURE(Source,pos - dy + dx).rgb);
+    vec3 res3 = GAMMA(COMPAT_TEXTURE(Source,pos + dy - dx).rgb);
+    vec3 res4 = GAMMA(COMPAT_TEXTURE(Source,pos + dy + dx).rgb);
+
+    vec3 res01 = mix(res1, res2, f.x);
+    vec3 res02 = mix(res3, res4, f.x);
+
+    vec3 res = mix(res01, res02, f.y);
+    float l = max(max(res.r, res.g), res.b);
+    res *= COLOR_BOOST;
+    // SCANLINES
+    float s = SCAN_STR*sin(ogl2pos.y*TAU)+1.0-SCAN_STR;
+    float beam = mix(BEAM_LOW, BEAM_HIGH, l);
+    s = pow(s, beam);
+    res *= s;
+
+    FragColor.rgb = sqrt(res);
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

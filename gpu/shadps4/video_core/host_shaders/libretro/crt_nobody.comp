@@ -1,0 +1,277 @@
+#version 450
+// bbport: compute port of the libretro shader crt/shaders/crt-nobody.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+   
+
+
+
+*/
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+
+/*
+   Hyllian's crt-nobody Shader
+   
+   Copyright (C) 2011-2022 Hyllian - sergiogdb@gmail.com
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+*/
+
+#pragma parameter VSCANLINES   "Vertical Scanlines"  0.0   0.0   1.0 1.0
+#pragma parameter SCAN_SIZE    "Scanlines Size"      0.86  0.0   2.0 0.01
+#pragma parameter COLOR_BOOST  "Color Boost"         1.25  1.0   2.0 0.05
+#pragma parameter InputGamma   "INPUT GAMMA"         2.4   0.0   4.0 0.1
+#pragma parameter OutputGamma  "OUTPUT GAMMA"        2.2   0.0   3.0 0.1
+
+#define PIX_SIZE    1.11
+
+#define saturate(c) clamp(c, 0.0, 1.0)
+#define lerp(a,b,c) mix(a,b,c)
+#define mul(a,b) (b*a)
+#define fmod(c,d) mod(c,d)
+#define frac(c) fract(c)
+#define tex2D(c,d) COMPAT_TEXTURE(c,d)
+#define float2 vec2
+#define float3 vec3
+#define float4 vec4
+#define int2 ivec2
+#define int3 ivec3
+#define int4 ivec4
+#define bool2 bvec2
+#define bool3 bvec3
+#define bool4 bvec4
+#define float2x2 mat2x2
+#define float3x3 mat3x3
+#define float4x4 mat4x4
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+vec4 t1;
+float pix_sizex;
+float scan_sizey;
+
+
+
+
+
+
+
+#define vTexCoord TEX0.xy
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define outsize vec4(OutputSize, 1.0 / OutputSize)
+
+#ifdef PARAMETER_UNIFORM
+#define VSCANLINES (bbport_param[0])
+#define SCAN_SIZE (bbport_param[1])
+#define COLOR_BOOST (bbport_param[2])
+#define InputGamma (bbport_param[3])
+#define OutputGamma (bbport_param[4])
+#else
+#define VSCANLINES  0.0
+#define SCAN_SIZE   0.86
+#define COLOR_BOOST 1.25
+#define InputGamma  2.4
+#define OutputGamma 2.2
+#endif
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    COL0 = COLOR;
+    TEX0.xy = TexCoord.xy * 1.0001;
+
+    pix_sizex  = mix(PIX_SIZE, SCAN_SIZE, VSCANLINES);
+    scan_sizey = mix(SCAN_SIZE, PIX_SIZE, VSCANLINES);
+   
+    float2 ps = float2(SourceSize.z, SourceSize.w);
+	float dx = ps.x;
+	float dy = ps.y;
+
+	t1.xy = float2( dx,  0.); // F
+	t1.zw = float2(  0., dy); // H
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+
+
+
+
+#ifdef PARAMETER_UNIFORM
+#define VSCANLINES (bbport_param[0])
+#define SCAN_SIZE (bbport_param[1])
+#define COLOR_BOOST (bbport_param[2])
+#define InputGamma (bbport_param[3])
+#define OutputGamma (bbport_param[4])
+#else
+#define VSCANLINES  0.0
+#define SCAN_SIZE   0.86
+#define COLOR_BOOST 1.25
+#define InputGamma  2.4
+#define OutputGamma 2.2
+#endif
+
+// compatibility #defines
+#define Source Texture
+#define vTexCoord TEX0.xy
+
+#define SourceSize vec4(TextureSize, 1.0 / TextureSize) //either TextureSize or InputSize
+#define outsize vec4(OutputSize, 1.0 / OutputSize)
+
+#define decal Source
+
+#define GAMMA_IN(color)     pow(color, float3(InputGamma, InputGamma, InputGamma))
+#define GAMMA_OUT(color)    pow(color, float3(1.0 / OutputGamma, 1.0 / OutputGamma, 1.0 / OutputGamma))
+
+float wgt(float size)
+{
+   size = clamp(size, -1.0, 1.0);
+
+   size = 1.0 - size * size;
+
+   return size * size * size;
+}
+
+
+void shader_main()
+{
+    float2 pos = frac(vTexCoord*SourceSize.xy)-float2(0.5, 0.5); // pos = pixel position
+    float2 dir = sign(pos); // dir = pixel direction
+    pos        = abs(pos);
+
+    float2 g1 = dir*t1.xy;
+    float2 g2 = dir*t1.zw;
+
+    float3 A = GAMMA_IN(tex2D(decal, vTexCoord       ).xyz);
+    float3 B = GAMMA_IN(tex2D(decal, vTexCoord +g1   ).xyz);
+    float3 C = GAMMA_IN(tex2D(decal, vTexCoord    +g2).xyz);
+    float3 D = GAMMA_IN(tex2D(decal, vTexCoord +g1+g2).xyz);
+
+    float2 dx = float2(pos.x, 1.0-pos.x) / pix_sizex;
+    float2 dy = float2(pos.y, 1.0-pos.y) / scan_sizey;
+
+    float2 wx = float2(wgt(dx.x), wgt(dx.y));
+    float2 wy = float2(wgt(dy.x), wgt(dy.y));
+
+    float3 color = (A*wx.x + B*wx.y)*wy.x + (C*wx.x + D*wx.y)*wy.y;
+
+    color *= COLOR_BOOST;
+
+    color  = GAMMA_OUT(color);
+
+    FragColor = vec4(color, 1.0);
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

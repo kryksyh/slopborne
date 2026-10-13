@@ -1,0 +1,28 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: 1-bit look of Return of the Obra Dinn. Cel tones first: dark surfaces become solid
+// ink, bright ones plain paper, and only the tones between are dithered; depth edges get an
+// outline in the opposite tone (light lines on dark objects, dark on light ones). Like Lucas
+// Pope's approach described in his Obra Dinn devlog, the dither pattern is anchored to the
+// camera's view direction rather than to the screen, so it moves with the scene when turning.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+
+void main() {
+    if (!begin_pixel()) return;
+    int palette = int(knobs[0] + 0.5), pattern = int(knobs[3] + 0.5);
+    float ink_below = knobs[1], paper_above = max(knobs[2], knobs[1] + 0.01);
+    bool stable = knobs[4] > 0.5, outlines = knobs[5] > 0.5;
+    float level = local_tone(scene_px, knobs[7], true);
+    float ramp = clamp((level - ink_below) / (paper_above - ink_below), 0.0, 1.0);
+    ivec2 cell = ivec2(floor(vec2(scene_px) + 0.5 + (stable ? camera_offset() : vec2(0.0))));
+    float threshold = pattern == 1 ? bayer4(cell) : pattern == 2 ? ign(cell) : bayer8(cell);
+    bool paper = ramp > threshold;
+    if (outlines && depth_edge(scene_px, knobs[6], 1) > 0.5) {
+        paper = level < 0.5 * (ink_below + paper_above);
+    }
+    vec3 ink, paper_color;
+    ink_palette(palette, ink, paper_color);
+    finish(paper ? paper_color : ink);
+}

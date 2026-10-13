@@ -1,0 +1,220 @@
+#version 450
+// bbport: compute port of the libretro shader handheld/shaders/dot.glsl
+// (https://github.com/libretro/glsl-shaders), unchanged except for the wrapper below.
+// Original header:
+/*
+*/
+
+// Parameter lines go here:
+
+#define PARAMETER_UNIFORM
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 0) uniform sampler2D Texture;
+layout(binding = 1, rgba8) uniform writeonly image2D bbport_result;
+layout(push_constant) uniform BbportParams {
+    vec2 OutputSize;
+    vec2 TextureSize;
+    vec2 InputSize;
+    int FrameCount;
+    int FrameDirection;
+    float bbport_param[24]; // the menu's knobs: the shader's #pragma parameters
+    vec4 bbport_view_to_world[3];
+    vec4 bbport_projection;
+    vec4 bbport_flags; // z: the game stores this picture blue-first (read and write swapped)
+};
+vec4 bbport_texture(sampler2D s, vec2 uv) {
+    vec4 c = texture(s, uv);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+vec4 bbport_texture(sampler2D s, vec2 uv, float bias) {
+    vec4 c = texture(s, uv, bias);
+    return bbport_flags.z > 0.5 ? c.bgra : c;
+}
+#define COMPAT_TEXTURE bbport_texture
+#define texture2D bbport_texture
+#define OrigInputSize InputSize
+#define OrigTextureSize TextureSize
+#define COMPAT_VARYING
+#define COMPAT_PRECISION
+#define COMPAT_ATTRIBUTE
+vec4 TEX0;
+vec4 TexCoord;
+vec4 VertexCoord;
+vec4 COLOR = vec4(1.0);
+mat4 MVPMatrix = mat4(1.0);
+vec4 bbport_position;
+vec4 FragColor;
+vec4 FragCoordC;
+vec2 bbport_output_size() { return OutputSize; }
+vec2 bbport_texture_size() { return TextureSize; }
+vec2 bbport_input_size() { return InputSize; }
+/*
+   Author: Themaister
+   License: Public domain
+*/
+
+// Parameter lines go here:
+#pragma parameter gamma "Dot Gamma" 2.4 0.0 5.0 0.05
+#pragma parameter shine "Dot Shine" 0.05 0.0 0.5 0.01
+#pragma parameter blend "Dot Blend" 0.65 0.0 1.0 0.01
+#pragma parameter soft "Dot Soft" 0.0 0.0 1.0 0.1
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+
+#endif
+
+#ifdef GL_ES
+
+#else
+
+#endif
+
+
+
+vec4 COL0;
+
+vec4 c00_10;
+vec4 c00_01;
+vec4 c20_01;
+vec4 c21_02;
+vec4 c12_22;
+vec2 c11;
+vec2 pixel_no;
+
+
+
+
+
+#ifdef PARAMETER_UNIFORM
+// All parameter floats need to have COMPAT_PRECISION in front of them
+#define soft (bbport_param[0])
+#else
+#define soft 0.0
+#endif
+
+void vertex_main()
+{
+    bbport_position = MVPMatrix * VertexCoord;
+    COL0 = COLOR;
+    TEX0.xy = TexCoord.xy;
+
+   pixel_no = TEX0.xy * TextureSize / InputSize * OrigInputSize;
+   vec2 d =       1.0 / TextureSize * InputSize / OrigInputSize;
+   
+   c00_10 = vec4((pixel_no + vec2(-1.0, -1.0) * soft) * d,
+                 (pixel_no + vec2( 0.0, -1.0) * soft) * d);
+   c20_01 = vec4((pixel_no + vec2( 1.0, -1.0) * soft) * d,
+                 (pixel_no + vec2(-1.0,  0.0) * soft) * d);
+   c21_02 = vec4((pixel_no + vec2( 1.0,  0.0) * soft) * d,
+                 (pixel_no + vec2(-1.0,  1.0) * soft) * d);
+   c12_22 = vec4((pixel_no + vec2( 0.0,  1.0) * soft) * d,
+                 (pixel_no + vec2( 1.0,  1.0) * soft) * d);
+   c11 = pixel_no * d;
+}
+
+
+
+#if __VERSION__ >= 130
+
+
+
+#else
+
+
+#endif
+
+#ifdef GL_ES
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+
+#else
+
+#endif
+
+#else
+
+#endif
+
+
+
+
+
+
+
+
+
+// compatibility #defines
+#define Source Texture
+
+#ifdef PARAMETER_UNIFORM
+// All parameter floats need to have COMPAT_PRECISION in front of them
+#define gamma (bbport_param[1])
+#define shine (bbport_param[2])
+#define blend (bbport_param[3])
+#else
+#define gamma 2.4
+#define shine 0.05
+#define blend 0.65
+#endif
+
+COMPAT_PRECISION float dist(vec2 coord, vec2 source)
+{
+   vec2 delta = coord - source;
+   return sqrt(dot(delta, delta));
+}
+
+COMPAT_PRECISION float color_bloom(vec3 color)
+{
+   const vec3 gray_coeff = vec3(0.30, 0.59, 0.11);
+   float bright = dot(color, gray_coeff);
+   return mix(1.0 + shine, 1.0 - shine, bright);
+}
+
+vec3 lookup(vec2 pixel_no, float offset_x, float offset_y, vec3 color)
+{
+   vec2 offset = vec2(offset_x, offset_y);
+   float delta = dist(fract(pixel_no), offset + vec2(0.5, 0.5));
+   return color * exp(-gamma * delta * color_bloom(color));
+}
+
+#define TEX(coord) COMPAT_TEXTURE(Source, coord).rgb
+
+void shader_main()
+{
+   vec3 mid_color = lookup(pixel_no, 0.0, 0.0, TEX(c11));
+   vec3 color = vec3(0.0, 0.0, 0.0);
+   color += lookup(pixel_no, -1.0, -1.0, TEX(c00_10.xy));
+   color += lookup(pixel_no,  0.0, -1.0, TEX(c00_10.zw));
+   color += lookup(pixel_no,  1.0, -1.0, TEX(c20_01.xy));
+   color += lookup(pixel_no, -1.0,  0.0, TEX(c20_01.zw));
+   color += mid_color;
+   color += lookup(pixel_no,  1.0,  0.0, TEX(c21_02.xy));
+   color += lookup(pixel_no, -1.0,  1.0, TEX(c21_02.zw));
+   color += lookup(pixel_no,  0.0,  1.0, TEX(c12_22.xy));
+   color += lookup(pixel_no,  1.0,  1.0, TEX(c12_22.zw));
+   vec3 out_color = mix(1.2 * mid_color, color, blend);
+   
+   FragColor = vec4(out_color, 1.0);
+} 
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(p, ivec2(bbport_output_size())))) return;
+    vec2 uv = (vec2(p) + 0.5) / bbport_output_size();
+    TEX0 = vec4(uv * bbport_input_size() / bbport_texture_size(), 0.0, 0.0);
+    TexCoord = TEX0;
+    VertexCoord = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
+    FragCoordC = vec4(vec2(p) + 0.5, 0.0, 1.0);
+    FragColor = vec4(0.0);
+    vertex_main();
+    shader_main();
+    vec3 bbport_color = clamp(FragColor.rgb, 0.0, 1.0);
+    imageStore(bbport_result, p, vec4(bbport_flags.z > 0.5 ? bbport_color.bgr : bbport_color, 1.0));
+}

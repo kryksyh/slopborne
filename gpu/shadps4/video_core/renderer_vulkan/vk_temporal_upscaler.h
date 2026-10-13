@@ -93,7 +93,7 @@ public:
 
     /// A pass's first color target: the last render-size RGBA8 target before the UI is the
     /// game's finished frame.
-    void OnColorTarget(VideoCore::ImageId color);
+    void OnColorTarget(VideoCore::ImageId color, bool blue_first = false);
 
     struct Target {
         vk::ImageView view;
@@ -193,6 +193,12 @@ private:
     /// Sharpness above 1 for FSR 3/4 (their RCAS stops at 1): one more RCAS pass over the target
     /// (output_image, or the 8-bit UI image with ldr) in General layout after the upscaler.
     void ExtraSharpen(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w, u32 h);
+    /// Copies `target` for a pass that reads neighbours; returns the view the pass writes.
+    vk::ImageView CopyForFilter(vk::CommandBuffer cmdbuf, vk::Image target, bool ldr, u32 w, u32 h);
+    /// bbport: the menu's retro filter: a libretro shader from the scene (iw x ih image, w x h
+    /// used) into the UI image (ow x oh), before the UI is drawn.
+    void RetroFilter(vk::CommandBuffer cmdbuf, vk::ImageView source, vk::ImageView depth, u32 iw,
+                     u32 ih, u32 w, u32 h, u32 ow, u32 oh);
 
     const Instance& instance;
     Scheduler& scheduler;
@@ -300,6 +306,17 @@ private:
     vk::UniqueImageView extra_sharpen_view;
     u32 extra_sharpen_width = 0, extra_sharpen_height = 0;
     vk::UniqueImageView ui_storage_view;
+    vk::UniqueDescriptorSetLayout retro_desc_layout;
+    vk::UniquePipelineLayout retro_pipeline_layout;
+    std::vector<vk::UniquePipeline> retro_pipelines; ///< built on first use
+    VideoCore::UniqueImage retro_history; ///< Datamosh: the previous filtered frame
+    vk::UniqueImageView retro_history_view;
+    u32 retro_history_width = 0, retro_history_height = 0;
+    bool retro_history_fresh = false;
+    bool ldr_blue_first = false; ///< the scene target holds blue in its red channel
+    bool filter_session = false; ///< patched for a picture filter: plain scaling
+    vk::UniqueSampler retro_sampler;
+    u64 retro_frame = 0;
 };
 
 } // namespace Vulkan

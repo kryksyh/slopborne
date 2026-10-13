@@ -1,0 +1,37 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// bbport: datamosh: like a video stream whose keyframes were dropped, each block keeps the
+// previous frame's pixels dragged along the current motion vectors; a clean frame arrives
+// every few seconds. Occasional blocks shift their color channels.
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+#include "retro_common.glsl"
+layout(binding = 3) uniform texture2D motion_tex;               // scene pixels, previous - current
+layout(binding = 4, rgba8) uniform readonly image2D history_img; // the previous output
+
+void main() {
+    if (!begin_pixel()) return;
+    float smear = knobs[0], keyframe = knobs[1], glitch = knobs[3];
+    int block = max(int(knobs[2] + 0.5), 1);
+    int period = max(int(keyframe * 30.0), 1);
+    vec3 current = scene_sample(scene_pos);
+    if (flags.y > 0.5 || frame_count % period == 0) {
+        finish(current);
+        return;
+    }
+    ivec2 block_px = (scene_px / block) * block + block / 2;
+    vec2 motion = texelFetch(motion_tex, clamp_scene(block_px), 0).rg; // previous - current
+    vec2 from = vec2(out_pixel) + motion * pixel_scale() * smear;
+    ivec2 src = clamp(ivec2(from), ivec2(0), ivec2(output_size) - 1);
+    // The history holds the output, in the game's channel order like the scene.
+    vec3 moshed = swap_order(imageLoad(history_img, src).rgb);
+    // Blocks that barely move bleed back toward the live picture so the screen never freezes.
+    float still = 1.0 - clamp(length(motion) * 0.5, 0.0, 1.0);
+    vec3 color = mix(moshed, current, 0.04 + 0.06 * still);
+    float h = hash12(vec2(block_px / block) + float(frame_count / 4) * 3.1);
+    if (h < glitch * 0.08) {
+        ivec2 shifted = clamp(src + ivec2(int(h * 300.0) % 24 - 12, 0), ivec2(0), ivec2(output_size) - 1);
+        color.r = swap_order(imageLoad(history_img, shifted).rgb).r;
+    }
+    finish(color);
+}
