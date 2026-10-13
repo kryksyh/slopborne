@@ -261,6 +261,9 @@ def run(args):
         record['launch_attempted'] = True
         with locked(lock):
             write_record(path, record)
+        # The game's FPS corner shows who queued this run and what it tests (bbport_overlay).
+        os.environ.setdefault('BB_RUN_COMMENT', f'{args.owner}: {args.label}')
+        os.environ.setdefault('BB_SHOW_FPS', '1')
         child = subprocess.Popen(command)
         record['child_pid'] = child.pid
         record['child_identity'] = process_identity(child.pid)

@@ -143,6 +143,11 @@ public:
         return maintenance_8;
     }
 
+    /// bbport: VK_GOOGLE_display_timing (presentation pacing diagnostic).
+    bool IsDisplayTimingSupported() const {
+        return display_timing;
+    }
+
     /// Returns true if VK_EXT_attachment_feedback_loop_layout is supported
     bool IsAttachmentFeedbackLoopLayoutSupported() const {
         return attachment_feedback_loop;
@@ -574,6 +579,7 @@ private:
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
     bool maintenance_8{};
+    bool display_timing{};
     bool attachment_feedback_loop{};
     bool image_2d_view_of_3d{};
     bool metal_objects{};

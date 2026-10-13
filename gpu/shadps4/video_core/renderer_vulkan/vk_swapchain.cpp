@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
+#include <fmt/format.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"
@@ -128,7 +131,21 @@ bool Swapchain::AcquireNextImage() {
 }
 
 bool Swapchain::Present() {
+    static const bool pacing_wanted = [] {
+        const char* env = std::getenv("BB_PRESENT_PACING");
+        return env && env[0] == '1';
+    }();
+    pacing.enabled = pacing_wanted && instance.IsDisplayTimingSupported();
+    const vk::PresentTimeGOOGLE present_time = {
+        .presentID = ++pacing.present_id,
+        .desiredPresentTime = 0,
+    };
+    const vk::PresentTimesInfoGOOGLE times_info = {
+        .swapchainCount = 1,
+        .pTimes = &present_time,
+    };
     const vk::PresentInfoKHR present_info = {
+        .pNext = pacing.enabled ? &times_info : nullptr,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
         .swapchainCount = 1,
@@ -145,8 +162,56 @@ bool Swapchain::Present() {
     }
 
     frame_index = (frame_index + 1) % image_count;
+    if (pacing.enabled && !needs_recreation) {
+        ReportPresentPacing();
+    }
 
     return !needs_recreation;
+}
+
+void Swapchain::ReportPresentPacing() {
+    const vk::Device device = instance.GetDevice();
+    if (pacing.refresh_ns == 0) {
+        const auto [result, cycle] = device.getRefreshCycleDurationGOOGLE(swapchain);
+        if (result != vk::Result::eSuccess || cycle.refreshDuration == 0) {
+            return;
+        }
+        pacing.refresh_ns = cycle.refreshDuration;
+    }
+    // Timings arrive a few frames late; polling every present keeps the driver's queue short.
+    auto [result, timings] = device.getPastPresentationTimingGOOGLE(swapchain);
+    if (result != vk::Result::eSuccess) {
+        return;
+    }
+    std::ranges::sort(timings, {}, &vk::PastPresentationTimingGOOGLE::presentID);
+    for (const auto& timing : timings) {
+        if (timing.presentID <= pacing.last_reported_id || timing.actualPresentTime == 0) {
+            continue;
+        }
+        if (pacing.last_actual_ns != 0 && timing.presentID == pacing.last_reported_id + 1) {
+            const u64 interval = timing.actualPresentTime - pacing.last_actual_ns;
+            const u64 n = (interval + pacing.refresh_ns / 2) / pacing.refresh_ns;
+            ++pacing.cycles[std::min<u64>(n, pacing.cycles.size() - 1)];
+            ++pacing.samples;
+        }
+        pacing.last_reported_id = timing.presentID;
+        pacing.last_actual_ns = timing.actualPresentTime;
+    }
+    if (pacing.samples == 0 || pacing.last_actual_ns - pacing.last_print_ns < 5'000'000'000ull) {
+        return;
+    }
+    pacing.last_print_ns = pacing.last_actual_ns;
+    std::string histogram;
+    for (u32 n = 1; n < pacing.cycles.size(); ++n) {
+        if (pacing.cycles[n]) {
+            histogram += fmt::format(" {}{}:{:.1f}%", n, n + 1 == pacing.cycles.size() ? "+" : "",
+                                     100.0 * pacing.cycles[n] / pacing.samples);
+        }
+    }
+    std::printf("Present pacing: refresh %.2f ms, %u frames, refresh cycles per frame%s\n",
+                pacing.refresh_ns / 1e6, pacing.samples, histogram.c_str());
+    pacing.cycles = {};
+    pacing.samples = 0;
 }
 
 void Swapchain::FindPresentFormat() {

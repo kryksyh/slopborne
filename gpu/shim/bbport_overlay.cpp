@@ -591,6 +591,19 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                 : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
                                                          : "");
+    // bbport: what this session renders and, for harness runs, who started it and why
+    // (BB_RUN_COMMENT from the queue wrapper, BB_RUN_ID from benchmark-run.py).
+    ImGui::Text("scene %d x %d -> output %d x %d", s.active_render_width.load(),
+                s.active_render_height.load(), BbSettings::OutputWidths[s.output_res],
+                BbSettings::OutputHeights[s.output_res]);
+    static const char* comment = std::getenv("BB_RUN_COMMENT");
+    static const char* run_id = std::getenv("BB_RUN_ID");
+    if (comment && comment[0]) {
+        ImGui::TextUnformatted(comment);
+    }
+    if (run_id && run_id[0]) {
+        ImGui::Text("run %s", run_id);
+    }
     ImGui::End();
 }
 

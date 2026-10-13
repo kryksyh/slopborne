@@ -199,7 +199,7 @@ def main():
     (run/'pad.txt').write_text('')
     (run/'capture-sequence.txt').write_text('0')
     shutil.copytree(a.save, run/'user')
-    env = dict(os.environ, BB_GPU_USER_DIR=str(a.profile.resolve()/'gpu'), BB_PIPELINE_CACHE='1', BB_DUMP_SHADERS='0',
+    env = dict(os.environ, BB_RUN_ID=run.name, BB_GPU_USER_DIR=str(a.profile.resolve()/'gpu'), BB_PIPELINE_CACHE='1', BB_DUMP_SHADERS='0',
                BB_CONFIG=str(a.profile.resolve()/'bbport.ini'), BB_UPSCALER='off', BB_OBJECT_MOTION='0', BB_VBLANK_HZ='0',
                BB_FPS_LIMIT='30', BB_FRAME_STATS='1', BB_GPU_PROFILE='0', BB_GPU_LOG='error', MVK_CONFIG_LOG_LEVEL='1',
                MTL_DEBUG_LAYER='0', MTL_SHADER_VALIDATION='0', BB_FRAME_DUMP_AT='0', BB_CAPTURE_AT='0')

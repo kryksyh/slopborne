@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <array>
+
 #include <mutex>
 #include <vector>
 #include "common/types.h"
@@ -132,6 +134,19 @@ private:
     u32 image_index = 0;
     u32 frame_index = 0;
     bool needs_recreation = true;
+    // bbport: BB_PRESENT_PACING=1 logs how many refresh cycles each presented frame stayed on
+    // screen (VK_GOOGLE_display_timing), the counter the frame-rate stats cannot see.
+    struct PresentPacing {
+        bool enabled = false;
+        u32 present_id = 0;
+        u64 refresh_ns = 0;
+        u64 last_actual_ns = 0;
+        u32 last_reported_id = 0;
+        std::array<u32, 8> cycles{}; ///< [n] = frames shown for n refresh cycles (7 = 7 or more)
+        u32 samples = 0;
+        u64 last_print_ns = 0;
+    } pacing;
+    void ReportPresentPacing();
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
 };
