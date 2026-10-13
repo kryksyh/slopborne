@@ -5,6 +5,12 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 
+#ifdef __APPLE__
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <mach/mach.h>
+#endif
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/types.h"
@@ -869,6 +875,64 @@ u64 Instance::GetDeviceMemoryUsage() const {
     return total_usage;
 }
 
+#ifdef __APPLE__
+/// bbport (macOS, from bmy/bbport-mac a923b61 + 4de5fd1): memory is shared by the CPU and the
+/// GPU, and Metal's limit (recommendedMaxWorkingSetSize, ~75% of the Mac's memory) is for all of
+/// this process, not the GPU alone. The game's direct memory, its heap, Rosetta and the runtime
+/// come on top of a budget of the whole limit, and the Mac swapped before the texture collector
+/// started. The GPU's share is the limit less what the process uses outside graphics memory
+/// (macOS's graphics ledger), at least 2 GB.
+static u64 UnifiedMemoryBudget(u64 limit, u64 gpu_usage) {
+    // Sampled at most every 250 ms (this runs at every texture collector tick).
+    static std::atomic<u64> other_cached{0}, graphics_cached{0};
+    static std::atomic<s64> sampled_ns{-1};
+    const s64 now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+    const s64 sampled = sampled_ns.load(std::memory_order_relaxed);
+    if (sampled < 0 || now - sampled >= 250'000'000) {
+        task_vm_info_data_t info{};
+        mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info),
+                      &count) != KERN_SUCCESS ||
+            count < TASK_VM_INFO_REV3_COUNT) {
+            return limit;
+        }
+        const u64 footprint = info.phys_footprint;
+        const s64 graphics_signed =
+            info.ledger_tag_graphics_footprint + info.ledger_tag_graphics_footprint_compressed;
+        const u64 graphics = graphics_signed > 0 ? u64(graphics_signed) : 0;
+        other_cached.store(footprint > graphics ? footprint - graphics : 0,
+                           std::memory_order_relaxed);
+        graphics_cached.store(graphics, std::memory_order_relaxed);
+        sampled_ns.store(now, std::memory_order_relaxed);
+    }
+    const u64 other = other_cached.load(std::memory_order_relaxed);
+    const u64 graphics = graphics_cached.load(std::memory_order_relaxed);
+    constexpr u64 Floor = u64{2} << 30;
+    const u64 budget = limit > other + Floor ? limit - other : Floor;
+    // Printed when the budget or the graphics memory moves by 1 GiB or more.
+    static std::atomic<u64> printed_budget{0}, printed_graphics{0};
+    const auto moved = [](u64 a, u64 b) { return (a > b ? a - b : b - a) >= (u64{1} << 30); };
+    u64 last_budget = printed_budget.load(std::memory_order_relaxed);
+    u64 last_graphics = printed_graphics.load(std::memory_order_relaxed);
+    const bool budget_moved =
+        moved(last_budget, budget) &&
+        printed_budget.compare_exchange_strong(last_budget, budget, std::memory_order_relaxed);
+    const bool graphics_moved =
+        moved(last_graphics, graphics) &&
+        printed_graphics.compare_exchange_strong(last_graphics, graphics, std::memory_order_relaxed);
+    if (budget_moved || graphics_moved) {
+        std::printf("GPU: memory budget %llu MiB (Metal's limit %llu MiB, less %llu MiB outside "
+                    "graphics memory); graphics memory %llu MiB, of it %llu MiB the renderer's\n",
+                    (unsigned long long)(budget >> 20), (unsigned long long)(limit >> 20),
+                    (unsigned long long)(other >> 20), (unsigned long long)(graphics >> 20),
+                    (unsigned long long)(gpu_usage >> 20));
+    }
+    return budget;
+}
+#endif
+
 u64 Instance::GetDeviceMemoryBudgetNow() const {
     vk::PhysicalDeviceMemoryBudgetPropertiesEXT memory_budget_props{};
     vk::PhysicalDeviceMemoryProperties2 props = {
@@ -877,9 +941,14 @@ u64 Instance::GetDeviceMemoryBudgetNow() const {
     physical_device.getMemoryProperties2(&props);
 
     u64 total_budget = 0;
+    [[maybe_unused]] u64 gpu_usage = 0;
     for (const size_t heap : valid_heaps) {
         total_budget += memory_budget_props.heapBudget[heap];
+        gpu_usage += memory_budget_props.heapUsage[heap];
     }
+#ifdef __APPLE__
+    total_budget = UnifiedMemoryBudget(total_budget, gpu_usage);
+#endif
     return total_budget;
 }
 
