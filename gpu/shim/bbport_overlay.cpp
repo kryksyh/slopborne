@@ -2,6 +2,7 @@
 #include "bbport_overlay.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cfloat>
 #include <chrono>
@@ -67,6 +68,8 @@ std::mutex imgui_mutex; // the ImGui context: window thread (input) and present 
 bool initialized = false;
 std::atomic<bool> menu_open{false};
 bool l3_down = false, r3_down = false;
+enum Page : int { PageDisplay, PageUpscaling, PageFilters, PageControls, PageGameplay, PageAdvanced,
+                  PageCount };
 int active_page = 0, requested_page = -1;
 bool confirm_restart = false;
 bool dirty = false; // settings changed while open: saved on close
@@ -281,9 +284,42 @@ void EffectOptions(EffectPage page) {
     }
 }
 
+// A greyed-out line under a control that is unavailable, saying why.
+void Because(const char* reason) {
+    ImGui::Indent();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextDisabled("%s", reason);
+    ImGui::PopTextWrapPos();
+    ImGui::Unindent();
+}
+
+// The scene is rendered smaller than the output: an upscaler fills the screen.
+bool SceneReduced() {
+    const auto& s = BbSettings::Get();
+    return s.output_res == BbSettings::OutputDefault ? s.render_res != BbSettings::RenderNative
+                                                     : s.preset != BbSettings::NativeAA;
+}
+
+bool TemporalUpscaler(int upscaler) {
+    return upscaler != BbSettings::UpscalerOff && upscaler != BbSettings::UpscalerStretch;
+}
+
+const char* UpscalerLabel(int upscaler, bool reduced) {
+    switch (upscaler) {
+    case BbSettings::UpscalerFsr3: return "FSR 3.1";
+    case BbSettings::UpscalerFsr4: return "FSR 4 (INT8)";
+    case BbSettings::UpscalerFsr411: return "FSR 4.1.1 (INT8)";
+    case BbSettings::UpscalerTaa: return T("TAA");
+    case BbSettings::UpscalerDlss: return "DLSS (NVIDIA RTX)";
+    case BbSettings::UpscalerMetalFx: return "MetalFX (Apple)";
+    case BbSettings::UpscalerStretch: return T("Bilinear stretch");
+    default: return reduced ? T("Bilinear stretch") : T("Off");
+    }
+}
+
 void DisplayMenu() {
     auto& s = BbSettings::Get();
-    ImGui::SeparatorText(T("Output resolution"));
+    ImGui::SeparatorText(T("Screen"));
     static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"};
     int output = s.output_res;
     if (ImGui::BeginCombo(T("Output resolution"), outputs[output])) {
@@ -294,127 +330,59 @@ void DisplayMenu() {
         }
         ImGui::EndCombo();
     }
-    if (BbSettings::FixedRenderSession()) {
-        Hint(T("Size of the final frame and interface. The preset sets the scene size relative to "
-               "the output: 4K Performance = 1920x1080. Applies after a game restart."));
-    } else {
-        Hint(T("Size of the final frame and interface, changed at the next frame. The preset sets "
-               "the scene size relative to the output: 4K Performance = 1920x1080. A size change "
-               "resets the FSR history and may cause a short pause."));
-    }
-    static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720",
-                                         "960 x 540", "640 x 360", "428 x 240"};
-    const int render_res = s.render_res;
-    ImGui::BeginDisabled(s.output_res != BbSettings::OutputDefault);
-    if (ImGui::BeginCombo(T("Render resolution"), render_sizes[render_res])) {
-        for (int i = 0; i < BbSettings::RenderResCount; ++i) {
-            if (ImGui::Selectable(render_sizes[i], i == render_res)) {
-                BbSettings::SelectRenderRes(i);
-                dirty = true;
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndDisabled();
-    Hint(T("Scene size at 1080p output, patched at game start: the smaller sizes are much faster "
-           "and the upscaler (MetalFX on Apple GPUs) fills 1080p. Applies after a game restart."));
+    Hint(T("Size of the final picture and the interface."));
     Checkbox(T("FPS counter in the corner"), s.show_fps);
-    ImGui::SeparatorText(T("Temporal upscaler"));
-    static const char* upscalers[] = {T("Off"), "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
-                                     T("TAA (native anti-aliasing)"), "DLSS (NVIDIA RTX)",
-                                     "MetalFX (Apple)", T("Bilinear stretch (no temporal, softer)")};
-    int upscaler = s.upscaler;
-    if (ImGui::BeginCombo(T("Upscaler"), upscalers[upscaler])) {
-        for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
-            const bool supported = i == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
-                : i == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
-                : i == BbSettings::UpscalerDlss   ? s.dlss_supported.load()
-                : i == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load() : true;
-            ImGui::BeginDisabled(!supported);
-            if (ImGui::Selectable(upscalers[i], i == upscaler)) {
-                Store(s.upscaler, i, true);
-                // A reduced render size needs a scaler: Off returns to native.
-                if (i == BbSettings::UpscalerOff && s.render_res != BbSettings::RenderNative) {
-                    s.render_res = BbSettings::RenderNative;
-                    s.native_upscaler = -1;
+
+    ImGui::SeparatorText(T("Render resolution"));
+    if (s.output_res == BbSettings::OutputDefault) {
+        static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720",
+                                             "960 x 540", "640 x 360", "428 x 240"};
+        const int render_res = s.render_res;
+        if (ImGui::BeginCombo(T("Scene size"), render_sizes[render_res])) {
+            for (int i = 0; i < BbSettings::RenderResCount; ++i) {
+                if (ImGui::Selectable(render_sizes[i], i == render_res)) {
+                    BbSettings::SelectRenderRes(i);
+                    dirty = true;
                 }
             }
-            ImGui::EndDisabled();
-            if (!supported) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("%s", T("— not supported by this GPU"));
-            }
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
-    }
-    if (const char* problem = s.dlss_problem.load(); problem && upscaler == BbSettings::UpscalerDlss) {
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "DLSS: %s", problem);
-    }
-    if (const char* problem = s.fsr4_problem.load()) {
-        ImGui::PushTextWrapPos();
-        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), T("FSR 4 unavailable: %s"), problem);
-        if (!BbSettings::IsFsr4(s.upscaler))
-            ImGui::TextUnformatted(T("The mode selected above is active. FSR 4 can be selected "
-                                     "again."));
-        ImGui::PopTextWrapPos();
-    }
-    const bool upscaler_on = s.upscaler != BbSettings::UpscalerOff;
-    const bool taa = s.upscaler == BbSettings::UpscalerTaa;
-    ImGui::BeginDisabled(!upscaler_on);
-    ImGui::BeginDisabled(taa);
-    int preset = taa ? BbSettings::NativeAA : s.preset.load();
-    char preset_label[64];
-    std::snprintf(preset_label, sizeof(preset_label), "%s (x%.1f)", BbSettings::PresetName(preset),
-                  BbSettings::PresetScale(preset));
-    if (ImGui::BeginCombo(T("Preset"), preset_label)) {
-        for (int i = 0; i < BbSettings::PresetCount; ++i) {
-            char label[64];
-            const float scale = BbSettings::PresetScale(i);
-            const int output = s.output_res;
-            std::snprintf(label, sizeof(label), T("%s (x%.1f, render %dx%d)"),
-                          BbSettings::PresetName(i), scale,
-                          int(std::lround(BbSettings::OutputWidths[output] / scale / 2) * 2),
-                          int(std::lround(BbSettings::OutputHeights[output] / scale / 2) * 2));
-            if (ImGui::Selectable(label, i == preset)) {
-                Store(s.preset, i, true);
-            }
-        }
-        ImGui::EndCombo();
-    }
-    ImGui::EndDisabled();
-    if (taa) {
-        ImGui::TextWrapped("%s", T("TAA anti-aliases the scene at the output resolution, without the "
-                             "FSR model or upscaling. The saved FSR preset comes back when FSR is "
-                             "selected."));
-    }
-    ImGui::Text(T("Scene render size: %d x %d"), s.active_render_width.load(),
-                s.active_render_height.load());
-    if (BbSettings::FixedRenderSession()) {
-        ImGui::Text(T("Preset at startup: %s"), BbSettings::PresetName(s.startup_preset));
-        if (const char* automatic = std::getenv("BB_AUTO_RENDER_RES");
-            automatic && automatic[0] == '1') {
-            Hint(T("With output other than 1080p the whole game renders at the preset resolution "
-                   "(patched at startup): fastest on Steam Deck and weaker GPUs. Preset and "
-                   "output resolution changes apply after a restart. \"Live resolution change\" "
-                   "in Advanced allows changes without a restart (post-processing then stays at 1080p, "
-                   "slower)."));
-        } else {
-            Hint(T("BB_RENDER_RES fixes the scene size at startup. Remove this variable to change "
-                   "resolution and presets without restarting the game."));
-        }
+        Hint(T("The size the game draws its 3D scene at. Smaller is much faster; the interface "
+               "stays at the output size. Applies after a game restart."));
     } else {
-        Hint(T("Native AA: FSR works as anti-aliasing. The other presets lower the scene render "
-               "resolution relative to the output. The interface is drawn at the output "
-               "resolution. The preset applies from the next frame, no restart."));
+        int preset = s.preset;
+        char preset_label[64];
+        const auto size_of = [&](int p) {
+            const float scale = BbSettings::PresetScale(p);
+            return std::array<int, 2>{
+                int(std::lround(BbSettings::OutputWidths[s.output_res] / scale / 2) * 2),
+                int(std::lround(BbSettings::OutputHeights[s.output_res] / scale / 2) * 2)};
+        };
+        const auto current = size_of(preset);
+        std::snprintf(preset_label, sizeof(preset_label), "%s (%d x %d)",
+                      BbSettings::PresetName(preset), current[0], current[1]);
+        if (ImGui::BeginCombo(T("Scene size"), preset_label)) {
+            for (int i = 0; i < BbSettings::PresetCount; ++i) {
+                const auto size = size_of(i);
+                char label[64];
+                std::snprintf(label, sizeof(label), "%s (%d x %d)", BbSettings::PresetName(i),
+                              size[0], size[1]);
+                if (ImGui::Selectable(label, i == preset)) {
+                    Store(s.preset, i, true);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        Hint(T("The 3D scene relative to the output size; the interface stays at the output "
+               "size."));
     }
-    Checkbox(T("Sharpening (RCAS)"), s.sharpen);
-    ImGui::BeginDisabled(!s.sharpen);
-    Slider(T("Sharpness"), s.sharpness, 0.0f, 2.0f);
-    Hint(T("Up to 1: the upscaler's own sharpening (RCAS). Above 1 an extra RCAS pass is added. "
-           "Ctrl+click the slider to type an exact value."));
-    ImGui::EndDisabled();
-    ImGui::EndDisabled(); // upscaler off
-    ImGui::SeparatorText(T("Game effects (after restart)"));
+    const bool reduced = SceneReduced();
+    ImGui::TextDisabled(T("Now: scene %d x %d, %s"), s.active_render_width.load(),
+                        s.active_render_height.load(),
+                        reduced ? UpscalerLabel(s.upscaler, true) : T("no upscaling"));
+    if (reduced) Because(T("The Upscaling tab chooses how the smaller scene fills the screen."));
+
+    ImGui::SeparatorText(T("Game detail (after restart)"));
     static const char* lods[] = {T("Highest (-2)"), T("As in the game"), T("Lower (1)"),
                                  T("Lowest (2)")};
     static constexpr int lod_values[] = {-2, 0, 1, 2};
@@ -431,7 +399,117 @@ void DisplayMenu() {
         ImGui::EndCombo();
     }
     EffectOptions(EffectPage::Display);
-    ImGui::TextWrapped("%s", T("Visual effects apply after restart."));
+}
+
+// The Upscaling tab: how the scene becomes the output picture (an upscaler when the scene is
+// smaller, anti-aliasing when it has the output size) and the temporal options.
+void UpscalingMenu() {
+    auto& s = BbSettings::Get();
+    const bool reduced = SceneReduced();
+    const auto supported = [&](int u) {
+        return u == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
+             : u == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
+             : u == BbSettings::UpscalerDlss ? s.dlss_supported.load()
+             : u == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load() : true;
+    };
+    const auto choice = [&](int u, const char* about) {
+        ImGui::BeginDisabled(!supported(u));
+        if (ImGui::Selectable(UpscalerLabel(u, reduced), s.upscaler == u)) {
+            Store(s.upscaler, u, true);
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", supported(u) ? about : T("not supported by this GPU"));
+    };
+    int shown = s.upscaler;
+    if (reduced && shown == BbSettings::UpscalerOff) shown = BbSettings::UpscalerStretch;
+    if (!reduced && shown == BbSettings::UpscalerStretch) shown = BbSettings::UpscalerOff;
+    if (reduced) {
+        ImGui::SeparatorText(T("Upscaler"));
+        if (ImGui::BeginCombo(T("Upscaler"), UpscalerLabel(shown, true))) {
+            choice(BbSettings::UpscalerMetalFx, T("temporal, sharp, Apple GPUs"));
+            choice(BbSettings::UpscalerFsr3, T("temporal"));
+            choice(BbSettings::UpscalerFsr4, T("temporal, best quality, heavier"));
+            choice(BbSettings::UpscalerFsr411, T("temporal"));
+            choice(BbSettings::UpscalerDlss, T("temporal, NVIDIA RTX"));
+            choice(BbSettings::UpscalerStretch, T("plain scaling: no smearing, softer"));
+            ImGui::EndCombo();
+        }
+        Hint(T("Fills the screen from the smaller scene. Temporal upscalers rebuild detail from "
+               "several frames (sharper, can smear in motion); bilinear stretch just scales."));
+    } else {
+        ImGui::SeparatorText(T("Anti-aliasing"));
+        if (ImGui::BeginCombo(T("Anti-aliasing"), UpscalerLabel(shown, false))) {
+            choice(BbSettings::UpscalerOff, T("the game's own anti-aliasing only"));
+            choice(BbSettings::UpscalerTaa, T("temporal, light"));
+            choice(BbSettings::UpscalerMetalFx, T("temporal, Apple GPUs"));
+            choice(BbSettings::UpscalerFsr3, T("temporal"));
+            choice(BbSettings::UpscalerFsr4, T("temporal, best quality, heavier"));
+            choice(BbSettings::UpscalerFsr411, T("temporal"));
+            choice(BbSettings::UpscalerDlss, T("temporal, NVIDIA RTX"));
+            ImGui::EndCombo();
+        }
+        Hint(T("The scene has the output size: these smooth edges using several frames. A "
+               "smaller scene size (Display tab) turns this into an upscaler."));
+    }
+    if (const char* problem = s.dlss_problem.load(); problem && s.upscaler == BbSettings::UpscalerDlss) {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), "DLSS: %s", problem);
+    }
+    if (const char* problem = s.fsr4_problem.load()) {
+        ImGui::PushTextWrapPos();
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f), T("FSR 4 unavailable: %s"), problem);
+        ImGui::PopTextWrapPos();
+    }
+
+    const bool temporal = TemporalUpscaler(shown);
+    const bool taa = shown == BbSettings::UpscalerTaa;
+    ImGui::SeparatorText(T("Sharpening"));
+    ImGui::BeginDisabled(!temporal || taa);
+    Checkbox(T("Sharpening (RCAS)"), s.sharpen);
+    ImGui::BeginDisabled(!s.sharpen);
+    Slider(T("Sharpness"), s.sharpness, 0.0f, 2.0f);
+    Hint(T("Up to 1: the upscaler's own sharpening. Above 1 an extra pass is added."));
+    ImGui::EndDisabled();
+    ImGui::EndDisabled();
+    if (!temporal || taa) Because(T("For MetalFX, FSR and DLSS."));
+
+    ImGui::SeparatorText(T("Temporal details"));
+    ImGui::BeginDisabled(!temporal);
+    Checkbox(T("Subpixel jitter"), s.jitter);
+    Hint(T("The scene shifts by a fraction of a pixel each frame so the upscaler gathers more "
+           "detail. Keep it on with MetalFX and FSR."));
+    ImGui::BeginDisabled(taa);
+    Checkbox(T("Reactive mask"), s.reactive);
+    Hint(T("Marks transparent effects (particles, haze) so the upscaler relies less on past "
+           "frames: fewer trails behind effects, some shimmer under them."));
+    if (s.reactive && temporal && !taa) {
+        ImGui::Indent();
+        Slider(T("Scale"), s.reactive_scale, 0.0f, 4.0f);
+        Slider(T("Threshold"), s.reactive_threshold, 0.0f, 1.0f);
+        Slider(T("Maximum"), s.reactive_max, 0.0f, 1.0f);
+        ImGui::Unindent();
+    }
+    ImGui::EndDisabled();
+    Checkbox(T("Character motion vectors (after restart)"), s.object_motion);
+    Hint(T("Exact motion for animated characters: less smearing on moving enemies, about a "
+           "fifth of the frame rate. Experimental."));
+    if (BbSettings::IsFsr4(s.upscaler)) {
+        Checkbox(T("FSR 4: auto exposure"), s.fsr4_auto_exposure);
+        Checkbox(T("FSR 4: inverted jitter sign"), s.fsr4_invert_jitter);
+    }
+    if (ImGui::CollapsingHeader(T("Debug views"))) {
+        bool show_mask = s.debug_view == BbSettings::DebugReactive;
+        if (ImGui::Checkbox(T("Show reactive mask"), &show_mask)) {
+            s.debug_view = show_mask ? BbSettings::DebugReactive : BbSettings::DebugNone;
+        }
+        bool show_motion = s.debug_view == BbSettings::DebugMotion;
+        if (ImGui::Checkbox(T("Show motion vectors"), &show_motion)) {
+            s.debug_view = show_motion ? BbSettings::DebugMotion : BbSettings::DebugNone;
+        }
+        Hint(T("Red/green: horizontal/vertical motion. Blue: an exact character vector."));
+    }
+    ImGui::EndDisabled();
+    if (!temporal) Because(T("For temporal upscalers and TAA."));
 }
 
 // The Filters tab: one picture filter on the scene (the interface stays sharp) and its knobs.
@@ -544,9 +622,10 @@ void FiltersMenu() {
 void AdvancedMenu() {
     auto& s = BbSettings::Get();
     ImGui::TextWrapped("%s", T("Rendering experiments and diagnostic views. Leave these unchanged unless testing a specific issue."));
-    ImGui::SeparatorText(T("Resolution changes"));
+    ImGui::SeparatorText(T("Resolution changes (outputs other than 1080p)"));
     static const char* live_modes[] = {T("Auto (by GPU)"), T("Off (faster)"), T("On")};
     int live = s.live_resolution + 1;
+    ImGui::BeginDisabled(s.output_res == BbSettings::OutputDefault);
     if (ImGui::BeginCombo(T("Live resolution change"), live_modes[live])) {
         for (int i = 0; i < 3; ++i) {
             if (ImGui::Selectable(live_modes[i], i == live)) {
@@ -559,62 +638,16 @@ void AdvancedMenu() {
            "post-processing stays at 1080p, noticeably slower on Steam Deck and older GPUs. Off: "
            "everything renders at the preset resolution, changes need a restart. Auto turns it on "
            "for powerful discrete GPUs. Applies after a game restart."));
+    ImGui::EndDisabled();
+    if (s.output_res == BbSettings::OutputDefault) {
+        Because(T("At 1080p the scene size is set on the Display tab (applies after a restart)."));
+    }
     ImGui::SeparatorText(T("Shader compilation"));
-    Checkbox(T("Experimental async shader compilation"), s.async_pipelines);
+    Checkbox(T("Async shader compilation (after restart)"), s.async_pipelines);
     Hint(T("Removes the stutter when something is seen for the first time: a new area, enemy "
            "or attack. The first time only, an enemy or character can show for a moment as a "
            "plain dark figure or not at all, an effect can be missing for a moment, and "
            "loading screens can take a little longer. Applies after a game restart."));
-
-    ImGui::SeparatorText(T("Temporal reconstruction"));
-    const bool taa = s.upscaler == BbSettings::UpscalerTaa;
-    ImGui::BeginDisabled(s.upscaler == BbSettings::UpscalerOff);
-    if (BbSettings::IsFsr4(s.upscaler)) {
-        if (s.upscaler == BbSettings::UpscalerFsr411) {
-            Hint(T("FSR 4.1.1 in INT8 mode: the AMD 4.1.1 DLL model reproduced in Vulkan (output "
-                   "matches the DLL). One model for Native..Performance and a separate one for "
-                   "Ultra Performance. Assets: tools/fsr4cap/build_assets.sh (needs the DLL and "
-                   "Proton)."));
-        } else {
-            Hint(T("FSR 4 in INT8 mode (model v07 from the AMD FidelityFX SDK sources). Better "
-                   "quality than FSR 3.1, but a heavier pass. Changing the preset rebuilds the "
-                   "model (short pause). Assets: tools/fetch_fsr4_assets.sh."));
-        }
-        Checkbox(T("FSR 4: auto exposure"), s.fsr4_auto_exposure);
-        Checkbox(T("FSR 4: inverted jitter sign"), s.fsr4_invert_jitter);
-        Hint(T("For ghosting checks: the FSR 4 network normalizes color by exposure and uses it "
-               "to decide when to discard past frames. Applied immediately, no restart."));
-    }
-    Checkbox(T("Subpixel jitter"), s.jitter);
-    Hint(T("Each frame the scene shifts by a fraction of a pixel, and the upscaler gathers more "
-           "detail from several frames. Without it you only get history anti-aliasing."));
-
-    ImGui::SeparatorText(T("Reactive mask"));
-    ImGui::BeginDisabled(taa);
-    Checkbox(T("Enable mask"), s.reactive);
-    Hint(T("Marks transparent effects (particles, haze) so the upscaler relies less on past "
-           "frames. Fewer trails behind effects, but shimmering returns under them."));
-    ImGui::BeginDisabled(!s.reactive);
-    Slider(T("Scale"), s.reactive_scale, 0.0f, 4.0f);
-    Slider(T("Threshold"), s.reactive_threshold, 0.0f, 1.0f);
-    Slider(T("Maximum"), s.reactive_max, 0.0f, 1.0f);
-    bool show_mask = s.debug_view == BbSettings::DebugReactive;
-    if (ImGui::Checkbox(T("Show mask (debug)"), &show_mask)) {
-        s.debug_view = show_mask ? BbSettings::DebugReactive : BbSettings::DebugNone;
-    }
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    Checkbox(T("Character motion vectors"), s.object_motion);
-    Hint(T("Exact vectors for animated objects: clothing and weapons break up less in motion. A "
-           "static scene gets no extra pass. Applies after a game restart."));
-    bool show_motion = s.debug_view == BbSettings::DebugMotion;
-    if (ImGui::Checkbox(T("Show motion vectors (debug)"), &show_motion)) {
-        s.debug_view = show_motion ? BbSettings::DebugMotion : BbSettings::DebugNone;
-    }
-    Hint(T("Red/green: horizontal/vertical motion (8 pixels = full brightness). Blue: the pixel "
-           "got an exact object vector, not just camera motion. A moving object with no blue and "
-           "no red/green is treated as static by the upscaler, hence the trail."));
-    ImGui::EndDisabled(); // upscaler off
 
     ImGui::SeparatorText(T("Developer tools (after restart)"));
     EffectOptions(EffectPage::Debug);
@@ -663,11 +696,12 @@ void Menu() {
     ImGui::Text("%.0f FPS  (%.1f ms)", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
     ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", T("Game is still running while settings are open."));
     ImGui::TextDisabled("%s", T("Shoulder buttons or Ctrl+Tab: switch page"));
-    static const char* pages[] = {"Display", "Controls", "Gameplay", "Advanced", "Filters"};
+    static const char* pages[PageCount] = {"Display", "Upscaling", "Filters", "Controls",
+                                           "Gameplay", "Advanced"};
     if (ImGui::BeginTabBar("SettingsPages")) {
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < PageCount; ++i) {
             const auto flags = requested_page == i ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-            ImGui::BeginDisabled(calibrating && i != 1);
+            ImGui::BeginDisabled(calibrating && i != PageControls);
             const bool selected = ImGui::BeginTabItem(T(pages[i]), nullptr, flags);
             ImGui::EndDisabled();
             if (!selected) continue;
@@ -676,16 +710,17 @@ void Menu() {
             const float footer = ImGui::GetFrameHeightWithSpacing() * 4.6f;
             if (ImGui::BeginChild(pages[i], ImVec2(0, -footer))) {
                 ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.48f);
-                if (i == 0) DisplayMenu();
-                if (i == 1) ControllerMenu();
-                if (i == 2) {
+                if (i == PageDisplay) DisplayMenu();
+                if (i == PageUpscaling) UpscalingMenu();
+                if (i == PageFilters) FiltersMenu();
+                if (i == PageControls) ControllerMenu();
+                if (i == PageGameplay) {
                     ImGui::SeparatorText(T("Gameplay preferences (after restart)"));
                     EffectOptions(EffectPage::Gameplay);
                     ImGui::Spacing();
                     if (ImGui::CollapsingHeader(T("Cheats (after restart)"))) EffectOptions(EffectPage::Cheats);
                 }
-                if (i == 3) AdvancedMenu();
-                if (i == 4) FiltersMenu();
+                if (i == PageAdvanced) AdvancedMenu();
                 ImGui::PopItemWidth();
             }
             ImGui::EndChild();
@@ -929,7 +964,7 @@ bool HandleEvent(const SDL_Event& event) {
                             (event.key.key == SDLK_COMMA && (event.key.mod & SDL_KMOD_GUI));
         if (is_open && down && !event.key.repeat && event.key.key == SDLK_TAB &&
             (event.key.mod & SDL_KMOD_CTRL) && !calibrating && !popup_open) {
-            requested_page = (active_page + ((event.key.mod & SDL_KMOD_SHIFT) ? 3 : 1)) % 4;
+            requested_page = (active_page + ((event.key.mod & SDL_KMOD_SHIFT) ? PageCount - 1 : 1)) % PageCount;
             io.ClearInputKeys();
             return true;
         }
@@ -990,7 +1025,7 @@ bool HandleEvent(const SDL_Event& event) {
             return false;
         }
         if (!popup_open && (button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER || button == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) {
-            if (down) requested_page = (active_page + (button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ? 3 : 1)) % 4;
+            if (down) requested_page = (active_page + (button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ? PageCount - 1 : 1)) % PageCount;
             io.ClearInputKeys();
             return true;
         }

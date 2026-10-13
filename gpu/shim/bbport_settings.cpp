@@ -236,8 +236,10 @@ bool FixedRenderSession() {
 
 int RenderPreset() {
     const auto& v = Get();
+    // At the 1080p output the scene size is the menu's render resolution (patched at start):
+    // the live presets are only for other outputs.
     return FixedRenderSession() ? v.startup_preset :
-        v.upscaler == UpscalerTaa ? NativeAA : v.preset.load();
+        (v.upscaler == UpscalerTaa || v.output_res == OutputDefault) ? NativeAA : v.preset.load();
 }
 
 bool ResolutionNeedsRestart() {
