@@ -14,6 +14,7 @@ struct Param {
     const char* label;
     float min, max, def, step;
     const char* choices = nullptr; ///< "A|B|C": an enum shown as a combo (value = index)
+    const char* when = nullptr;    ///< "key=value": only used while that knob has that value
 };
 
 /// The port's own shaders (vk_temporal_upscaler.cpp picks the SPIR-V by this id).
@@ -63,7 +64,7 @@ inline constexpr Param ObraParams[] = {
     {"pattern", "Dither pattern", 0, 2, 0, 1, "Bayer 8x8|Bayer 4x4|Noise"},
     {"stable", "Pattern follows the camera", 0, 1, 1, 1},
     {"outlines", "Outlines", 0, 1, 1, 1},
-    {"edge", "Outline sensitivity", 0.25f, 4, 1, 0.05f},
+    {"edge", "Outline sensitivity", 0.25f, 4, 1, 0.05f, nullptr, "outlines=1"},
     {"adapt", "Adapt to local light", 0, 1, 0.5f, 0.05f},
 };
 inline constexpr Param SinCityParams[] = {
@@ -132,7 +133,7 @@ inline constexpr Param LinesParams[] = {
 };
 inline constexpr Param TiltShiftParams[] = {
     {"auto", "Focus on the screen center", 0, 1, 1, 1},
-    {"focus", "Focus distance (m)", 1, 60, 8, 0.5f},
+    {"focus", "Focus distance (m)", 1, 60, 8, 0.5f, nullptr, "auto=0"},
     {"band", "Sharp band", 0.05f, 1, 0.25f, 0.01f},
     {"blur", "Blur", 0, 8, 4, 0.25f},
     {"saturation", "Saturation", 0, 2, 1.35f, 0.05f},

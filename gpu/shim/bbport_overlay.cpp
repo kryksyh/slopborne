@@ -579,7 +579,23 @@ void FiltersMenu() {
     for (int k = 0; k < filter.param_count; ++k) {
         const auto& param = filter.params[k];
         auto& value = s.filter_params[index][k];
+        // A knob that only matters for one value of another knob is greyed out otherwise.
+        bool unused = false;
+        const char* unused_because = "";
+        if (param.when) {
+            const std::string_view rule = param.when;
+            const auto eq = rule.find('=');
+            const std::string_view other = rule.substr(0, eq);
+            const float wanted = std::strtof(std::string(rule.substr(eq + 1)).c_str(), nullptr);
+            for (int o = 0; o < filter.param_count; ++o) {
+                if (other == filter.params[o].key && s.filter_params[index][o] != wanted) {
+                    unused = true;
+                    unused_because = filter.params[o].label;
+                }
+            }
+        }
         ImGui::PushID(k);
+        ImGui::BeginDisabled(unused);
         float v = value;
         bool changed = false;
         if (param.choices) {
@@ -611,6 +627,10 @@ void FiltersMenu() {
             }
         }
         Store(value, std::clamp(v, param.min, param.max), changed);
+        ImGui::EndDisabled();
+        if (unused) {
+            Because((std::string(T("Not used with this setting: ")) + unused_because).c_str());
+        }
         ImGui::PopID();
     }
     if (ImGui::Button(T("Reset this filter's settings"))) {

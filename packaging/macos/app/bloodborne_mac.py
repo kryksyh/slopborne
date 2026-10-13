@@ -282,6 +282,10 @@ def game_environment(config, game):
     env.setdefault('MVK_CONFIG_LIVE_CHECK_ALL_RESOURCES', '1')
     # Metal encoding on the recording thread instead of inside vkQueueSubmit on the draw thread.
     env.setdefault('MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS', '2')
+    # Approved in the 2026-10-13 playtest: constant-factor tessellation as plain draws, bounded
+    # buffer reads.
+    env.setdefault('BB_TESS_FUSION', '1')
+    env.setdefault('BB_BOUNDED_BUFFER_READS', '1')
     # Frame-time game timing with an even cap: 30 FPS keeps 33.3 ms pacing on Apple Silicon.
     env.setdefault('BB_FPS', 'uncap')
     env.setdefault('BB_FPS_LIMIT', str(config['fps_limit']))
