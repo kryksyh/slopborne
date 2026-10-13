@@ -967,6 +967,68 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
     DrawRecord(pipeline, used_prepared, is_indexed, index_offset);
 }
 
+// Diagnostic only: BB_DIAG_SKIP_VS / BB_DIAG_SKIP_PS list 32-bit shader hashes whose draws are
+// recorded without the draw command (pass, binds and barriers stay), so the frame time bounds the
+// GPU cost of those draws; BB_DIAG_SKIP_WHOLE=1 skips the whole draw record instead.
+namespace {
+struct DiagSkip {
+    std::vector<u32> vs;
+    std::vector<u32> ps;
+    std::vector<u32> cs;
+    bool whole{};
+    bool any{};
+
+    static const DiagSkip& Get() {
+        static const DiagSkip skip = [] {
+            DiagSkip s;
+            const auto parse = [](const char* env, std::vector<u32>& out) {
+                for (const char* p = env ? env : ""; *p;) {
+                    char* end;
+                    out.push_back(u32(std::strtoul(p, &end, 16)));
+                    if (end == p) {
+                        break;
+                    }
+                    p = *end == ',' ? end + 1 : end;
+                }
+            };
+            parse(std::getenv("BB_DIAG_SKIP_VS"), s.vs);
+            parse(std::getenv("BB_DIAG_SKIP_PS"), s.ps);
+            parse(std::getenv("BB_DIAG_SKIP_CS"), s.cs);
+            s.whole = std::getenv("BB_DIAG_SKIP_WHOLE") != nullptr;
+            s.any = !s.vs.empty() || !s.ps.empty() || !s.cs.empty();
+            return s;
+        }();
+        return skip;
+    }
+
+    bool Matches(const GraphicsPipeline* pipeline) const {
+        if (!any) {
+            return false;
+        }
+        const auto* ps_info = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+        const u32 vs_hash = u32(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash);
+        const u32 ps_hash = u32(ps_info ? ps_info->pgm_hash : 0);
+        return Hit(std::ranges::find(vs, vs_hash) != vs.end() ||
+                   std::ranges::find(ps, ps_hash) != ps.end());
+    }
+
+    bool MatchesCompute(u64 cs_hash) const {
+        return any && Hit(std::ranges::find(cs, u32(cs_hash)) != cs.end());
+    }
+
+    static bool Hit(bool hit) {
+        if (hit) {
+            static std::atomic<u64> skipped{0};
+            if (const u64 n = ++skipped; (n & (n - 1)) == 0) {
+                std::printf("Diag skip: %llu draws/dispatches so far\n",
+                            static_cast<unsigned long long>(n));
+            }
+        }
+        return hit;
+    }
+};
+} // namespace
+
 void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw* used_prepared,
                             bool is_indexed, u32 index_offset) {
     BbStats::Timer stall_timer{BbStats::t_draw_record};
@@ -977,6 +1039,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     }
     if (!deferred_dispatches.empty()) {
         RecordDeferredDispatches();
+    }
+    const bool diag_skipped = DiagSkip::Get().Matches(pipeline);
+    if (diag_skipped && DiagSkip::Get().whole) {
+        return;
     }
     const auto& regs = Regs();
     // bbport: the pass copying a finished frame to a display buffer; the previous draw's
@@ -1211,6 +1277,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u64 replay_args_offset = geometry_indirect.offset + 4 * sizeof(u32);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        if (diag_skipped) {
+            return;
+        }
         if (replay_args) {
             cmdbuf.drawIndirect(replay_args, replay_args_offset, 1, sizeof(VkDrawIndirectCommand));
         } else if (is_indexed) {
@@ -1434,6 +1503,10 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
     }
+    const bool diag_skipped = DiagSkip::Get().Matches(pipeline);
+    if (diag_skipped && DiagSkip::Get().whole) {
+        return;
+    }
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
     const u32 max_count = indirect.max_count;
@@ -1514,6 +1587,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
+        if (diag_skipped) {
+            return;
+        }
         if (is_indexed) {
             if (counts) {
                 cmdbuf.drawIndexedIndirectCount(args, args_offset, counts, counts_offset, max_count,
@@ -1636,8 +1712,12 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
+    const bool diag_skipped = DiagSkip::Get().MatchesCompute(cs.pgm_hash);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
+        if (diag_skipped) {
+            return;
+        }
         cmdbuf.dispatch(dim_x, dim_y, dim_z);
     });
     DebugState.IncDispatch();
@@ -1817,8 +1897,13 @@ void Rasterizer::DispatchIndirectRecord(const ComputePipeline* pipeline, VAddr a
     const vk::Pipeline handle = pipeline->Handle();
     const vk::Buffer args = buffer->Handle();
     const u64 args_offset = base;
+    const bool diag_skipped =
+        DiagSkip::Get().MatchesCompute(pipeline->GetStage(Shader::SwStage::Compute).pgm_hash);
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
+        if (diag_skipped) {
+            return;
+        }
         cmdbuf.dispatchIndirect(args, args_offset);
     });
     DebugState.IncDispatch();
