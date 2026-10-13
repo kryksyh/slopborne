@@ -87,7 +87,8 @@ class NativeUiTests(unittest.TestCase):
         self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
 
     def test_menu_render_size_at_1080p(self):
-        for size, expected in [('1600x900', (1600, 900)), ('1280x720', (1280, 720))]:
+        for size, expected in [('1600x900', (1600, 900)), ('1280x720', (1280, 720)), ('960x540', (960, 540)),
+                               ('640x360', (640, 360)), ('428x240', (428, 240))]:
             with self.subTest(size=size):
                 self.assertEqual(scaled_sizes({'output_res': '1920x1080', 'upscaler': 'metalfx',
                                                'render_res': size}), (expected, (1920, 1080)))

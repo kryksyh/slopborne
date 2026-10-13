@@ -300,7 +300,8 @@ void DisplayMenu() {
                "the scene size relative to the output: 4K Performance = 1920x1080. A size change "
                "resets the FSR history and may cause a short pause."));
     }
-    static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720"};
+    static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720",
+                                         "960 x 540", "640 x 360", "428 x 240"};
     const int render_res = s.render_res;
     ImGui::BeginDisabled(s.output_res != BbSettings::OutputDefault);
     if (ImGui::BeginCombo(T("Render resolution"), render_sizes[render_res])) {
@@ -319,7 +320,7 @@ void DisplayMenu() {
     ImGui::SeparatorText(T("Temporal upscaler"));
     static const char* upscalers[] = {T("Off"), "FSR 3.1", "FSR 4 (INT8)", "FSR 4.1.1 (INT8)",
                                      T("TAA (native anti-aliasing)"), "DLSS (NVIDIA RTX)",
-                                     "MetalFX (Apple)"};
+                                     "MetalFX (Apple)", T("Bilinear stretch (no temporal, softer)")};
     int upscaler = s.upscaler;
     if (ImGui::BeginCombo(T("Upscaler"), upscalers[upscaler])) {
         for (int i = 0; i < BbSettings::UpscalerCount; ++i) {
@@ -330,6 +331,11 @@ void DisplayMenu() {
             ImGui::BeginDisabled(!supported);
             if (ImGui::Selectable(upscalers[i], i == upscaler)) {
                 Store(s.upscaler, i, true);
+                // A reduced render size needs a scaler: Off returns to native.
+                if (i == BbSettings::UpscalerOff && s.render_res != BbSettings::RenderNative) {
+                    s.render_res = BbSettings::RenderNative;
+                    s.native_upscaler = -1;
+                }
             }
             ImGui::EndDisabled();
             if (!supported) {
@@ -651,6 +657,7 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerTaa ? "TAA"
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                 : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
+                : s.upscaler == BbSettings::UpscalerStretch ? "Bilinear"
                                                          : "");
     // bbport: what this session renders and, for harness runs, who started it and why
     // (BB_RUN_COMMENT from the queue wrapper, BB_RUN_ID from benchmark-run.py).

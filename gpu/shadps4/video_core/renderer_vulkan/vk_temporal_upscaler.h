@@ -184,6 +184,8 @@ private:
     void RecordTaa(vk::CommandBuffer cmdbuf, vk::ImageView color, vk::ImageView depth);
     /// MetalFX selected and available (macOS, VK_EXT_metal_objects).
     [[nodiscard]] bool UseMetalFx() const;
+    /// bbport: plain bilinear scaling of a reduced scene (no history, no jitter).
+    [[nodiscard]] bool UseStretch() const;
     /// Submits the frame so far, then MetalFX writes output_image; `cmdbuf` becomes the new
     /// command buffer, recorded after the upscale. On failure FSR 3 takes over.
     bool RecordMetalFx(vk::CommandBuffer& cmdbuf, vk::Image color, vk::Image depth, u32 w,

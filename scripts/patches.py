@@ -129,7 +129,7 @@ def output_size(settings):
     return OUTPUT_SIZE
 
 
-RENDER_SIZES={'1600x900':(1600,900),'1280x720':(1280,720)}
+RENDER_SIZES={'1600x900':(1600,900),'1280x720':(1280,720),'960x540':(960,540),'640x360':(640,360),'428x240':(428,240)}
 
 
 def menu_render_size(settings):

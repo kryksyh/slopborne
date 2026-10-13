@@ -241,13 +241,14 @@ bool TemporalUpscaler::Active() const {
             BbSettings::IsFsr4(BbSettings::Get().upscaler) ||
             BbSettings::Get().upscaler == BbSettings::UpscalerTaa ||
             BbSettings::Get().upscaler == BbSettings::UpscalerDlss ||
-            BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx) &&
+            BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx || UseStretch()) &&
            !BbToggle::Disabled(1u << 24);
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
     // FSR 4 takes no reactive mask: the opaque snapshot and the mask pass would be wasted.
     return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) && !UseFsr4() && !UseDlss() &&
+           !UseStretch() &&
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa;
 }
 
@@ -303,7 +304,7 @@ bool TemporalUpscaler::OnFrameStart() {
     const int preset = BbSettings::RenderPreset();
     if (applied_preset != preset || settings.upscaler == BbSettings::UpscalerOff) failed = false;
     const bool active = Active();
-    const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
+    const bool jitter_on = active && settings.jitter && !UseStretch() && !BbToggle::Disabled(1u << 25);
     const int upscaler = settings.upscaler.load();
     const int output = settings.output_res.load();
     const bool output_changed = !scaled_session && applied_output != output;
@@ -380,7 +381,7 @@ void TemporalUpscaler::OnDispatch(u64 cs_hash) {
 
 bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     // DLSS and MetalFX, like FSR 4, have their own context: no portable FSR 3 context is made.
-    const bool use_fsr4 = UseFsr4() || UseDlss() || UseMetalFx();
+    const bool use_fsr4 = UseFsr4() || UseDlss() || UseMetalFx() || UseStretch();
     const bool use_taa = BbSettings::Get().upscaler == BbSettings::UpscalerTaa;
     if (use_taa && (w != ow || h != oh)) {
         std::printf("TAA: remove BB_RENDER_RES to use native-resolution TAA\n");
@@ -1290,7 +1291,7 @@ std::array<u32, 2> TemporalUpscaler::SceneSize(u32 w, u32 h) const {
 }
 
 float TemporalUpscaler::SceneMipBias() const {
-    if (!Active() || BbSettings::Get().upscaler == BbSettings::UpscalerTaa) return 0.0f;
+    if (!Active() || BbSettings::Get().upscaler == BbSettings::UpscalerTaa || UseStretch()) return 0.0f;
     const float render = float(BbSettings::Get().active_render_width.load());
     const float output = float(Scaled() ? target_width : 1920u);
     return render > 0.0f && render < output ? std::log2(render / output) : 0.0f;
@@ -1625,6 +1626,37 @@ void TemporalUpscaler::RunScaled() {
         frame_ms = 16.6f;
     }
     last_frame = now;
+
+    if (UseStretch()) {
+        barrier(color_image, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral, all,
+                vk::AccessFlagBits2::eShaderRead, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
+        barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
+                all, rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
+                vk::AccessFlagBits2::eTransferWrite);
+        const vk::ImageBlit region{
+            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(w), s32(h), 1}},
+            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+            .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(ow), s32(oh), 1}},
+        };
+        cmdbuf.blitImage(color_image, vk::ImageLayout::eGeneral, vk::Image(ui_image),
+                         vk::ImageLayout::eGeneral, region, vk::Filter::eLinear);
+        barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite,
+                vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                color_access);
+        barrier(color_image, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
+                vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead,
+                vk::ImageLayout::eGeneral, all, vk::AccessFlagBits2::eShaderRead);
+        reset = false;
+        dispatched_last_frame = true;
+        done_this_frame = true;
+        ui_phase = true;
+        ui_color = ldr_target;
+        ui_depth = camera_motion.Depth();
+        return;
+    }
 
     // bbport: FSR 4 writes its HDR-format output, copied into the output-size UI image.
     if (UseFsr4() || UseDlss() || UseMetalFx() ||
@@ -2047,6 +2079,10 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
         reset = true;
     }
     return ok;
+}
+
+bool TemporalUpscaler::UseStretch() const {
+    return BbSettings::Get().upscaler == BbSettings::UpscalerStretch && scaled_session;
 }
 
 bool TemporalUpscaler::UseMetalFx() const {

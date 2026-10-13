@@ -10,6 +10,8 @@
  "Выкл"},
 {"TAA (native anti-aliasing)",
  "TAA (нативное сглаживание)"},
+{"Bilinear stretch (no temporal, softer)",
+ "Билинейное растяжение (без временного, мягче)"},
 {"Upscaler",
  "Апскейлер"},
 {"— not supported by this GPU",

@@ -235,7 +235,7 @@ void SelectRenderRes(int render_res) {
             v.native_upscaler = v.upscaler.load();
         }
         const int u = v.upscaler;
-        if (v.metalfx_supported || u == UpscalerOff || u == UpscalerTaa) {
+        if (u != UpscalerStretch && (v.metalfx_supported || u == UpscalerOff || u == UpscalerTaa)) {
             v.upscaler = v.metalfx_supported ? UpscalerMetalFx : UpscalerFsr3;
         }
     }
@@ -293,7 +293,7 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss", "metalfx"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "dlss", "metalfx", "stretch"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
 }
 
