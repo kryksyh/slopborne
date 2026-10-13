@@ -284,8 +284,11 @@ def main():
             print(f'Output {scaled_output}: live resolution changes (live_resolution=0: startup patch)')
         elif scaled_output:
             env.update(BB_RENDER_RES=scaled_render, BB_OUTPUT_RES=scaled_output, BB_AUTO_RENDER_RES='1')
-            env.setdefault('BB_DMEM_MB', '9152')
-            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {env["BB_DMEM_MB"]} MiB '
+            # Only outputs above 1080p need more direct memory: on Macs the extra reserve swapped
+            # (PabloVSouza 2933ee8: 9152 MiB ran the clinic at 7 FPS instead of 36 on 18 GB).
+            if int(scaled_output.split('x')[0]) > 1920:
+                env.setdefault('BB_DMEM_MB', '9152')
+            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {env.get("BB_DMEM_MB", "default")} MiB '
                   '(live_resolution=1: live changes)')
         run_script('patches.py', '--out', out, '--fps', fps, '--extra', env.get('BB_PATCHES', ''),
                    '--settings', config, '--game-dir', game, '--render-res', env.get('BB_RENDER_RES', ''),
