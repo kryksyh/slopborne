@@ -91,6 +91,38 @@ def effect_patches(settings):
     lod=MODEL_LOD.get(settings.get('model_lod','0'))
     if lod: names.append(lod)
     return names
+# The game picks a model LOD in five places, each adding the global LOD bias at 0x5587d20 to the
+# object's own base and clamping to 0..2. The community "Model LOD" patches replace the bias read
+# in one of them (0x1d6fc09); these are the other four reads, given the same constant.
+LOD_BIAS=0x5587d20
+LOD_READS=(0x1d1875f,0x1d217a7,0x1d2487e,0x1d43040)
+
+
+def file_offset(elf, vaddr):
+    phoff,=struct.unpack_from('<Q',elf,0x20)
+    phentsize,phnum=struct.unpack_from('<HH',elf,0x36)
+    for i in range(phnum):
+        kind,_,offset,start,_,filesz,_,_=struct.unpack_from('<IIQQQQQQ',elf,phoff+i*phentsize)
+        if kind==1 and start<=vaddr<start+filesz: return offset+vaddr-start
+    return None
+
+
+def model_lod_writes(settings, elf):
+    """mov eax/ecx, <lod>; nop over the other bias reads (checked: mov from LOD_BIAS)."""
+    lod=settings.get('model_lod','0')
+    if lod not in MODEL_LOD: return []
+    writes=[]
+    for vaddr in LOD_READS:
+        offset=file_offset(elf,vaddr)
+        if offset is None: continue
+        code=elf[offset:offset+6]
+        if code[0]!=0x8b or code[1] not in (0x05,0x0d): continue
+        if vaddr+6+struct.unpack_from('<i',code,2)[0]!=LOD_BIAS: continue
+        register=0xb8 if code[1]==0x05 else 0xb9
+        writes.append((vaddr,bytes([register])+struct.pack('<i',int(lod))+b'\x90'))
+    return writes
+
+
 SCENE_WIDTH=0x02196A6B-EBOOT_BASE
 SCENE_HEIGHT=0x02196A7A-EBOOT_BASE
 UI_WIDTH=0x02358554-EBOOT_BASE
@@ -335,6 +367,11 @@ def main():
     validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     writes=compile_patches(a.xml,names,a.app_version,segments)
+    lod_writes=model_lod_writes(read_settings(a.settings),(a.out/'eboot.elf').read_bytes())
+    if lod_writes:
+        writes+=lod_writes
+        print(f'Patches: model LOD {read_settings(a.settings).get("model_lod")} at all '
+              f'{len(lod_writes)+1} LOD choices')
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
     # it into the output-size image with a viewport scaled by output / 1920
