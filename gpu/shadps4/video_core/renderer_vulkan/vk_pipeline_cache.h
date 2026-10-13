@@ -7,6 +7,7 @@
 #include <shared_mutex>
 #include <variant>
 #include <boost/container/static_vector.hpp>
+#include <fmt/format.h>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
@@ -223,6 +224,9 @@ private:
     /// tessellation (vk_tess_fusion.h; null: not fusable), by local, hull and domain module.
     std::mutex module_spirv_mutex;
     std::unordered_map<VkShaderModule, std::vector<u32>> module_spirv;
+    static std::string FusedBlobName(u64 fused_hash) {
+        return fmt::format("{:#018x}_fused", fused_hash);
+    }
     struct FusedModule {
         vk::ShaderModule module;
         u32 vertices{};

@@ -241,8 +241,25 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     GraphicsPipeline::SerializationSupport sdata{};
     sdata.Deserialize(ar);
 
+    // bbport: a fused tessellation pipeline (FuseTessellation; hull stage, no patches): its
+    // vertex stage is the fused shader stored beside the key, the hull and domain stages give
+    // the bindings.
+    constexpr u32 Local = u32(Shader::SwStage::Vertex), Hull = u32(Shader::SwStage::TessellationControl),
+                  Domain = u32(Shader::SwStage::TessellationEval);
+    std::vector<u32> fused;
+    if (sel.graphics_key.stage_hashes[Hull] && sel.graphics_key.patch_control_points == 0) {
+        Storage::DataBase::Instance().Load(Storage::BlobType::ShaderBinary,
+                                           FusedBlobName(sel.graphics_key.stage_hashes[Local]),
+                                           fused);
+        if (fused.size() < 4) {
+            return false;
+        }
+    }
+
     for (int stage_idx = 0; stage_idx < MaxShaderStages; ++stage_idx) {
-        const auto& hash = sel.graphics_key.stage_hashes[stage_idx];
+        const auto hash = stage_idx == Local && !fused.empty()
+                              ? u64(fused[1]) | u64(fused[2]) << 32
+                              : sel.graphics_key.stage_hashes[stage_idx];
         if (!hash) {
             continue;
         }
@@ -261,13 +278,31 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         }
     }
 
+    u32 fused_vertices = 0;
+    if (!fused.empty()) {
+        // The draw-time FuseTessellation finds this module for the same three stages.
+        const auto modules = std::tuple{static_cast<VkShaderModule>(sel.modules[Local]),
+                                        static_cast<VkShaderModule>(sel.modules[Hull]),
+                                        static_cast<VkShaderModule>(sel.modules[Domain])};
+        std::scoped_lock lock{module_spirv_mutex};
+        auto [module, is_new] = fused_modules.try_emplace(modules);
+        if (is_new) {
+            module->second = {CompileSPV(std::span{fused}.subspan(3), instance.GetDevice()),
+                              fused[0]};
+        }
+        fused_vertices = module->second.vertices;
+        sel.modules[Local] = module->second.module;
+        sel.modules[Hull] = nullptr;
+        sel.modules[Domain] = nullptr;
+    }
+
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     ASSERT(is_new);
 
     it.value() = std::make_unique<GraphicsPipeline>(
         instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
         sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, true, nullptr,
-        async_compiler.get());
+        async_compiler.get(), fused_vertices);
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);

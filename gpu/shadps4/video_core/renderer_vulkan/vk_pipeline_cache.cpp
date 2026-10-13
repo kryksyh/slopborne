@@ -523,7 +523,8 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false, sel.geometry,
             async_compiler.get(), sel.tess_fused_vertices);
 
-        if (!sel.geometry && !sel.tess_fused_vertices) {
+        // Geometry pipelines are built at draw time from guest-memory constants the key lacks.
+        if (!sel.geometry) {
             RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
         }
         ++num_new_pipelines;
@@ -1160,6 +1161,8 @@ bool PipelineCache::FuseTessellation(PipelineSelection& sel) {
     const auto modules = std::tuple{static_cast<VkShaderModule>(sel.modules[Local]),
                                     static_cast<VkShaderModule>(sel.modules[Hull]),
                                     static_cast<VkShaderModule>(sel.modules[Domain])};
+    auto& key = sel.graphics_key;
+    const u64 fused_hash = key.stage_hashes[Local] * 31 + key.stage_hashes[Domain] + 0x7e55;
     FusedModule fused;
     {
         std::scoped_lock lock{module_spirv_mutex};
@@ -1173,6 +1176,13 @@ bool PipelineCache::FuseTessellation(PipelineSelection& sel) {
                 if (const auto spv = FuseQuadTessellation(local->second, hull->second,
                                                           domain->second)) {
                     it->second = {CompileSPV(spv->spirv, instance.GetDevice()), spv->vertices};
+                    // For the warm-up (LoadGraphicsPipeline): vertices, the local stage's hash,
+                    // the fused SPIR-V.
+                    const u64 local_hash = key.stage_hashes[Local];
+                    std::vector<u32> blob{spv->vertices, u32(local_hash), u32(local_hash >> 32)};
+                    blob.insert(blob.end(), spv->spirv.begin(), spv->spirv.end());
+                    Storage::DataBase::Instance().Save(Storage::BlobType::ShaderBinary,
+                                                       FusedBlobName(fused_hash), std::move(blob));
                 }
             }
             if (std::getenv("BB_TESS_FUSE_LOG")) {
@@ -1191,8 +1201,7 @@ bool PipelineCache::FuseTessellation(PipelineSelection& sel) {
     // One vertex shader drawing the pattern per patch: no hull or domain stage. Their infos stay:
     // the shaders' binding numbers count the hull stage's resources first
     // (GraphicsPipeline::TessFusedVertices).
-    auto& key = sel.graphics_key;
-    key.stage_hashes[Local] = key.stage_hashes[Local] * 31 + key.stage_hashes[Domain] + 0x7e55;
+    key.stage_hashes[Local] = fused_hash;
     key.patch_control_points = 0;
     key.prim_type = AmdGpu::PrimitiveType::TriangleList;
     sel.modules[Hull] = nullptr;
