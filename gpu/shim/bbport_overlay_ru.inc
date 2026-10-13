@@ -54,11 +54,11 @@
  "Пресет при запуске: %s"},
 {"With output other than 1080p the whole game renders at the preset resolution (patched at "
  "startup): fastest on Steam Deck and weaker GPUs. Preset and output resolution changes apply "
- "after a restart. \"Live resolution change\" below allows changes without a restart "
+ "after a restart. \"Live resolution change\" in Advanced allows changes without a restart "
  "(post-processing then stays at 1080p, slower).",
  "При выводе не 1080p вся игра рисуется в разрешении пресета (патч при запуске): это быстрее "
  "всего на Steam Deck и слабых GPU. Смена пресета или разрешения вывода — после перезапуска. "
- "Пункт «Смена разрешения на лету» ниже включает смену без перезапуска (постобработка тогда "
+ "Пункт «Смена разрешения на лету» в разделе «Дополнительно» включает смену без перезапуска (постобработка тогда "
  "остаётся в 1080p, медленнее)."},
 {"BB_RENDER_RES fixes the scene size at startup. Remove this variable to change resolution "
  "and presets without restarting the game.",
@@ -262,3 +262,24 @@
 {"Controller: [%s] = OK, [%s] = cancel", "Контроллер: [%s] = OK, [%s] = отмена"},
 {"Options/Menu or Esc cancels calibration.", "Options/Menu или Esc отменяет калибровку."},
 {"Button labels change the game glyphs after restart. Controls stay the same.", "Обозначения кнопок меняют значки в игре после перезапуска. Управление остаётся прежним."},
+
+{"Display", "Изображение"},
+{"Controls", "Управление"},
+{"Gameplay", "Игра"},
+{"Advanced", "Дополнительно"},
+{"Shoulder buttons or Ctrl+Tab: switch page", "Бамперы или Ctrl+Tab: сменить раздел"},
+{"Visual effects apply after restart.", "Визуальные эффекты применяются после перезапуска."},
+{"Rendering experiments and diagnostic views. Leave these unchanged unless testing a specific issue.",
+ "Экспериментальные настройки и диагностика. Меняйте их только для проверки конкретной проблемы."},
+{"Resolution changes", "Изменение разрешения"},
+{"Shader compilation", "Компиляция шейдеров"},
+{"Temporal reconstruction", "Временная реконструкция"},
+{"Developer tools (after restart)", "Инструменты разработчика (после перезапуска)"},
+{"Gameplay preferences (after restart)", "Настройки игры (после перезапуска)"},
+{"Cheats (after restart)", "Читы (после перезапуска)"},
+{"Restart now? Progress since the last game save may be lost.",
+ "Перезапустить сейчас? Прогресс после последнего сохранения игры может быть потерян."},
+{"Restart now", "Перезапустить"},
+{"Keep playing", "Продолжить игру"},
+{"No restart needed", "Перезапуск не требуется"},
+{"Settings save automatically when this menu closes.", "Настройки сохраняются при закрытии этого меню."},
