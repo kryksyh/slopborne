@@ -51,6 +51,8 @@ public:
         }();
         return value;
     }
+    /// bbport: snap the frame limit to whole display refresh cycles (BB_FPS_SNAP=0 keeps it exact).
+    bool IsFrameLimitSnapped() { static const auto value = Flag("BB_FPS_SNAP", false); return value; }
     bool IsCopyGpuBuffers() { static const auto value = Flag("BB_COPY_GPU_BUFFERS", false); return value; }
     bool IsDirectMemoryAccessEnabled() { static const auto value = Flag("BB_DIRECT_MEMORY_ACCESS", false); return value; }
     bool IsDumpShaders() { static const auto value = Flag("BB_DUMP_SHADERS", false); return value; }

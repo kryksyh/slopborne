@@ -654,11 +654,21 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // bbport: frame limit (see EmulatorSettings::GetFrameLimit). A request waits in the queue
     // until its slot; slots advance by one period (no drift) but never lag behind by more.
     const u32 frame_limit = EmulatorSettings.GetFrameLimit();
-    const auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
-                                          : std::chrono::nanoseconds(0);
+    auto frame_period = frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit)
+                                    : std::chrono::nanoseconds(0);
     auto next_flip = std::chrono::steady_clock::now();
     std::printf("VideoOut: vblank %u Hz, frame limit %u FPS\n",
                 EmulatorSettings.GetVblankFrequency(), frame_limit);
+    // bbport: with vsync a frame stays on screen for whole refresh cycles, so a limit that does
+    // not divide the display rate alternates two frame lengths (30 FPS on 75 Hz: 26.7 and 40 ms).
+    // Snap the period to the nearest whole number of cycles, ties towards the shorter period.
+    if (frame_limit && EmulatorSettings.IsFrameLimitSnapped()) {
+        const u32 hz = BbDisplayRefreshHz();
+        const u32 cycles = std::max<u32>(1, u32(std::ceil(double(hz) / frame_limit - 0.5)));
+        frame_period = std::chrono::nanoseconds(1000000000ull * cycles / hz);
+        std::printf("VideoOut: frame limit snapped to %.2f FPS (%u refresh cycles of %u Hz)\n",
+                    double(hz) / cycles, cycles, hz);
+    }
 
     const auto receive_request = [this] -> Request {
         std::scoped_lock lk{mutex};
