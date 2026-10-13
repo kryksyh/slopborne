@@ -75,10 +75,12 @@ enum : std::uint64_t {
     DetachedTail = 1ull << 60, ///< parse the rest of a command buffer from a copy once it signals
     PrePassCopies = 1ull << 61, ///< copy shader copies during a render pass go before the pass
     SubmitCopyParse = 1ull << 62, ///< top-level command buffers are parsed from the submit copy
-    // Less idle spinning (rfn9617 6e3c2778, laptop power), A/B in one run (free bits here):
-    ShortRecorderSpin = 1ull << 1, ///< the Vulkan recorder sleeps after 40 us without work, not 200
-    DrainSleep = 1ull << 2,        ///< stage A sleeps in long drains instead of yielding in a loop
-    PrepWakeOne = 1ull << 63,      ///< one draw-preparation worker woken per scanned submission
+    // Less idle spinning (rfn9617 6e3c2778, laptop power), one bit for all three (bits below 32
+    // are runtime_memory.c's, 20-31 debug and slice clears: 63 is the only free one):
+    LessSpinning = 1ull << 63,
+    ShortRecorderSpin = LessSpinning, ///< the recorder sleeps after 40 us without work, not 200
+    DrainSleep = LessSpinning,        ///< stage A sleeps in long drains instead of yielding
+    PrepWakeOne = LessSpinning,       ///< one draw-preparation worker woken per scanned submission
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {
