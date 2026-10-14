@@ -1,0 +1,41 @@
+# Attaches a CI package to a release from GitHub's side: large files (the ~900 MB AppImage) fail
+# to upload over slow connections. Run it from the Actions tab or with `gh workflow run`.
+name: attach-artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Workflow run that built the package
+        required: true
+      artifact:
+        description: Artifact name (slopborne-macos, slopborne-windows, slopborne-linux)
+        required: true
+      tag:
+        description: Release tag
+        required: true
+      name:
+        description: Asset name in the release
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Attach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT: ${{ inputs.artifact }}
+          TAG: ${{ inputs.tag }}
+          NAME: ${{ inputs.name }}
+        run: |
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n "$ARTIFACT" -D artifact
+          package=$(find artifact -type f ! -name 'SHA256SUMS*' ! -name '*.sha256' | head -1)
+          cp "$package" "$NAME"
+          sha256sum "$NAME"
+          gh release upload "$TAG" "$NAME" -R "$GITHUB_REPOSITORY" --clobber
