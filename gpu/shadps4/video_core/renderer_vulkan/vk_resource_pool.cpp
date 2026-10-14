@@ -92,9 +92,13 @@ void CommandPool::Allocate(std::size_t begin, std::size_t end) {
         device.allocateCommandBuffers(&buffer_alloc_info, cmd_buffers.data() + begin);
     ASSERT(result == vk::Result::eSuccess);
 
+#ifndef __APPLE__
+    // bbport (macOS): unnamed. MoltenVK labels every Metal encoder with its command buffer's
+    // name, formatted per encoder: ~4% of the draw recording thread (Wooloomooloo2's findings).
     for (std::size_t i = begin; i < end; ++i) {
         SetObjectName(device, cmd_buffers[i], "CommandPool: Command Buffer {}", i);
     }
+#endif
 }
 
 vk::CommandBuffer CommandPool::Commit() {
