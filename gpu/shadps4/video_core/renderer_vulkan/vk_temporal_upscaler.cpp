@@ -1251,6 +1251,13 @@ void TemporalUpscaler::Run() {
         profiler->Mark(0xF5A0'0000ull ^ std::hash<std::string_view>{}(label),
                        [label] { return std::string{label}; });
     }
+    // MetalFX on this path (the HDR scene before post-processing) ended the game at load in
+    // 3 of 6 launches (SIGBUS, an exception inside Apple's frameworks; 2026-10-14). It stays
+    // the upscaler of startup-patched scenes (RunScaled); here FSR 3.1 takes over.
+    if (BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx) {
+        std::printf("Upscaler: MetalFX is for reduced scene sizes; FSR 3.1 at this size\n");
+        BbSettings::Get().upscaler = BbSettings::UpscalerFsr3;
+    }
     auto& color = texture_cache.GetImage(scene_color);
     auto& depth = texture_cache.GetImage(camera_motion.Depth());
     const u32 ow = color.info.size.width, oh = color.info.size.height;
@@ -1890,14 +1897,19 @@ void TemporalUpscaler::RunScaled() {
         barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
                 all, rw, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits2::eBlit,
                 vk::AccessFlagBits2::eTransferWrite);
-        const vk::ImageBlit region{
-            .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-            .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(w), s32(h), 1}},
-            .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
-            .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(ow), s32(oh), 1}},
-        };
-        cmdbuf.blitImage(color_image, vk::ImageLayout::eGeneral, vk::Image(ui_image),
-                         vk::ImageLayout::eGeneral, region, vk::Filter::eLinear);
+        if (!ScaleSpatially(cmdbuf, color_image, color_view, source_width, source_height, w, h,
+                            ow, oh)) {
+            const vk::ImageBlit region{
+                .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(w), s32(h), 1}},
+                .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+                .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(ow), s32(oh), 1}},
+            };
+            cmdbuf.blitImage(color_image, vk::ImageLayout::eGeneral, vk::Image(ui_image),
+                             vk::ImageLayout::eGeneral, region,
+                             BbSettings::Get().upscaler == BbSettings::UpscalerNearest
+                                 ? vk::Filter::eNearest : vk::Filter::eLinear);
+        }
         RetroFilter(cmdbuf, color_view, depth_view, source_width, source_height, w, h, ow, oh);
         barrier(vk::Image(ui_image), vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eGeneral,
                 vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferWrite,
@@ -1943,6 +1955,7 @@ void TemporalUpscaler::RunScaled() {
             if (BbSettings::Get().upscaler != BbSettings::UpscalerTaa) {
                 ExtraSharpen(cmdbuf, vk::Image(output_image), false, ow, oh);
             }
+            ScaledDebugView(cmdbuf, ow, oh, mask_ready && ReactiveOn());
             barrier(vk::Image(output_image), vk::ImageAspectFlagBits::eColor,
                     vk::ImageLayout::eGeneral, all, rw, vk::ImageLayout::eGeneral,
                     vk::PipelineStageFlagBits2::eBlit, vk::AccessFlagBits2::eTransferRead);
@@ -2341,8 +2354,126 @@ bool TemporalUpscaler::RecordDlss(vk::CommandBuffer cmdbuf, const Dlss::Resource
 }
 
 bool TemporalUpscaler::UseStretch() const {
-    return scaled_session &&
-           (BbSettings::Get().upscaler == BbSettings::UpscalerStretch || filter_session);
+    return scaled_session && (BbSettings::IsSpatial(BbSettings::Get().upscaler) || filter_session);
+}
+
+// bbport: the spatial upscaler choices of a reduced scene, into the UI image (in the transfer
+// layouts the blit path set up). False: the caller blits (bilinear, nearest, or a fallback).
+bool TemporalUpscaler::ScaleSpatially(vk::CommandBuffer& cmdbuf, vk::Image color_image,
+                                      vk::ImageView color_view, u32 source_width,
+                                      u32 source_height, u32 w, u32 h, u32 ow, u32 oh) {
+    const int upscaler = BbSettings::Get().upscaler;
+    if (upscaler == BbSettings::UpscalerMetalFxSpatial && metalfx && !metalfx_failed) {
+        // MetalFX encodes into its own Metal command buffer, between this submission and the next.
+        const u64 ready = metalfx->NextReady();
+        SubmitInfo info{};
+        info.AddSignal(metalfx->Semaphore(), ready);
+        scheduler.Flush(info);
+        const bool ok = metalfx->EncodeSpatial(color_image, w, h, vk::Image(ui_image), ow, oh, ready);
+        if (ok) {
+            scheduler.WaitBeforeNextSubmit(metalfx->Semaphore(), ready + 1);
+        } else {
+            std::printf("Upscaler: MetalFX spatial failed; using bilinear stretch\n");
+            BbSettings::Get().upscaler = BbSettings::UpscalerStretch;
+        }
+        cmdbuf = scheduler.CommandBuffer();
+        return ok;
+    }
+    if (upscaler != BbSettings::UpscalerFsr1) {
+        return false;
+    }
+    if (!fsr1_created) {
+        fsr1.Create(instance.GetDevice(), instance.GetAllocator(), 2);
+        fsr1_created = true;
+    }
+    const vk::ImageMemoryBarrier2 to_read{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = color_image,
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    };
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_read});
+    // The scene may fill only the top-left w x h of an image the game aligned.
+    const vk::ImageView out = fsr1.Render(cmdbuf, color_view, {w, h}, {ow, oh},
+                                          {.enable = true, .use_rcas = true}, false,
+                                          {source_width, source_height});
+    if (out == color_view) {
+        return false; // not smaller than the output: nothing to upscale
+    }
+    const vk::ImageMemoryBarrier2 to_copy{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eBlit,
+        .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+        .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = fsr1.LastOutput(),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    };
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &to_copy});
+    const vk::ImageBlit region{
+        .srcSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .srcOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(ow), s32(oh), 1}},
+        .dstSubresource = {vk::ImageAspectFlagBits::eColor, 0, 0, 1},
+        .dstOffsets = std::array{vk::Offset3D{0, 0, 0}, vk::Offset3D{s32(ow), s32(oh), 1}},
+    };
+    cmdbuf.blitImage(fsr1.LastOutput(), vk::ImageLayout::eGeneral, vk::Image(ui_image),
+                     vk::ImageLayout::eGeneral, region, vk::Filter::eNearest);
+    return true;
+}
+
+// bbport: the menu's debug views (reactive mask, motion vectors) on the upscaled output of a
+// reduced scene, drawn in place by the merge shader before the output reaches the UI image.
+void TemporalUpscaler::ScaledDebugView(vk::CommandBuffer cmdbuf, u32 ow, u32 oh, bool has_reactive) {
+    const int debug_view = BbSettings::Get().debug_view;
+    const u32 mode = debug_view == BbSettings::DebugReactive && has_reactive ? 1
+                   : debug_view == BbSettings::DebugMotion                  ? 2
+                                                                            : 0;
+    if (mode == 0) {
+        return;
+    }
+    const vk::ImageMemoryBarrier2 written{
+        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+        .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
+        .oldLayout = vk::ImageLayout::eGeneral,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = vk::Image(output_image),
+        .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+    };
+    cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &written});
+    const vk::DescriptorImageInfo output_info{.imageView = *output_view,
+                                              .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo mask_info{.imageView = *reactive_view,
+                                            .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::ImageView objects = camera_motion.ObjectMotionView();
+    const vk::DescriptorImageInfo motion_info{.imageView = *motion_view,
+                                              .imageLayout = vk::ImageLayout::eGeneral};
+    const vk::DescriptorImageInfo objects_info{.imageView = objects ? objects : *motion_view,
+                                               .imageLayout = vk::ImageLayout::eGeneral};
+    // The output is both the upscaled color and the image drawn into (same pixel, in place).
+    const std::array<vk::WriteDescriptorSet, 5> writes = {{
+        {.dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .pImageInfo = &output_info},
+        {.dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .pImageInfo = &output_info},
+        {.dstBinding = 2, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageImage,
+         .pImageInfo = &mask_info},
+        {.dstBinding = 3, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampledImage,
+         .pImageInfo = &motion_info},
+        {.dstBinding = 4, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampledImage,
+         .pImageInfo = &objects_info},
+    }};
+    cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *merge_pipeline);
+    cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *merge_pipeline_layout, 0, writes);
+    cmdbuf.pushConstants(*merge_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(mode),
+                         &mode);
+    cmdbuf.dispatch((ow + 7) / 8, (oh + 7) / 8, 1);
 }
 
 bool TemporalUpscaler::UseMetalFx() const {

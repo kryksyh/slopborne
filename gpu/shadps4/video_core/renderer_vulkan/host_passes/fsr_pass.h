@@ -19,8 +19,15 @@ public:
 
     void Create(vk::Device device, VmaAllocator allocator, u32 num_images);
 
+    /// bbport: `input_image_size` is the input image's whole size when the content
+    /// (`input_size`) fills only its top-left part; zero when they match.
     vk::ImageView Render(vk::CommandBuffer cmdbuf, vk::ImageView input, vk::Extent2D input_size,
-                         vk::Extent2D output_size, Settings settings, bool hdr);
+                         vk::Extent2D output_size, Settings settings, bool hdr,
+                         vk::Extent2D input_image_size = {});
+    /// bbport: the image the last Render wrote (shader-read-only layout), for a copy.
+    vk::Image LastOutput() const {
+        return last_output;
+    }
 
 private:
     struct Img {
@@ -49,6 +56,7 @@ private:
     vk::UniquePipeline rcas_pipeline{};
 
     vk::Extent2D cur_size{};
+    vk::Image last_output{};
     u32 cur_image{};
     std::vector<Img> available_imgs;
 };

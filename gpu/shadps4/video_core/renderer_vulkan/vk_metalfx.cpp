@@ -30,6 +30,10 @@ bool MetalFx::Encode(const Frame&, u64) {
     return false;
 }
 
+bool MetalFx::EncodeSpatial(vk::Image, u32, u32, vk::Image, u32, u32, u64) {
+    return false;
+}
+
 } // namespace Vulkan
 
 #endif

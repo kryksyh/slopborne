@@ -40,6 +40,10 @@ public:
     u64 NextReady();
     /// Encodes the upscale to run after Semaphore() reaches `ready`; it signals `ready + 1`.
     bool Encode(const Frame& frame, u64 ready);
+    /// MetalFX spatial upscale (one frame, no history) of the color image's width x height
+    /// content into the output's out_width x out_height; ordered like Encode.
+    bool EncodeSpatial(vk::Image color, u32 width, u32 height, vk::Image output, u32 out_width,
+                       u32 out_height, u64 ready);
 
 private:
     MetalFx();

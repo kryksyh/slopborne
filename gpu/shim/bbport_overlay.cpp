@@ -297,7 +297,7 @@ bool SceneReduced() {
 }
 
 bool TemporalUpscaler(int upscaler) {
-    return upscaler != BbSettings::UpscalerOff && upscaler != BbSettings::UpscalerStretch;
+    return upscaler != BbSettings::UpscalerOff && !BbSettings::IsSpatial(upscaler);
 }
 
 const char* UpscalerLabel(int upscaler, bool reduced) {
@@ -309,6 +309,9 @@ const char* UpscalerLabel(int upscaler, bool reduced) {
     case BbSettings::UpscalerDlss: return "DLSS (NVIDIA RTX)";
     case BbSettings::UpscalerMetalFx: return "MetalFX (Apple)";
     case BbSettings::UpscalerStretch: return T("Bilinear stretch");
+    case BbSettings::UpscalerNearest: return T("Nearest neighbor");
+    case BbSettings::UpscalerFsr1: return "FSR 1";
+    case BbSettings::UpscalerMetalFxSpatial: return T("MetalFX spatial");
     default: return reduced ? T("Bilinear stretch") : T("Off");
     }
 }
@@ -421,7 +424,8 @@ void UpscalingMenu() {
         return u == BbSettings::UpscalerFsr4 ? s.fsr4_supported.load()
              : u == BbSettings::UpscalerFsr411 ? s.fsr411_supported.load()
              : u == BbSettings::UpscalerDlss ? s.dlss_supported.load()
-             : u == BbSettings::UpscalerMetalFx ? s.metalfx_supported.load() : true;
+             : u == BbSettings::UpscalerMetalFx || u == BbSettings::UpscalerMetalFxSpatial
+                 ? s.metalfx_supported.load() : true;
     };
     const auto choice = [&](int u, const char* about) {
         ImGui::BeginDisabled(!supported(u));
@@ -434,7 +438,9 @@ void UpscalingMenu() {
     };
     int shown = s.upscaler;
     if (reduced && shown == BbSettings::UpscalerOff) shown = BbSettings::UpscalerStretch;
-    if (!reduced && shown == BbSettings::UpscalerStretch) shown = BbSettings::UpscalerOff;
+    if (!reduced && BbSettings::IsSpatial(shown)) {
+        shown = BbSettings::UpscalerOff;
+    }
     if (reduced) {
         ImGui::SeparatorText(T("Upscaler"));
         if (ImGui::BeginCombo(T("Upscaler"), UpscalerLabel(shown, true))) {
@@ -444,6 +450,9 @@ void UpscalingMenu() {
             choice(BbSettings::UpscalerFsr411, T("temporal"));
             choice(BbSettings::UpscalerDlss, T("temporal, NVIDIA RTX"));
             choice(BbSettings::UpscalerStretch, T("plain scaling: no smearing, softer"));
+            choice(BbSettings::UpscalerMetalFxSpatial, T("single frame, sharp edges, Apple GPUs"));
+            choice(BbSettings::UpscalerFsr1, T("single frame, sharp edges"));
+            choice(BbSettings::UpscalerNearest, T("plain scaling: hard pixels"));
             ImGui::EndCombo();
         }
         Hint(T("Temporal upscalers cause some smearing but are generally sharper. Prefer MetalFX."));
@@ -452,7 +461,6 @@ void UpscalingMenu() {
         if (ImGui::BeginCombo(T("Anti-aliasing"), UpscalerLabel(shown, false))) {
             choice(BbSettings::UpscalerOff, T("the game's own anti-aliasing only"));
             choice(BbSettings::UpscalerTaa, T("temporal, light"));
-            choice(BbSettings::UpscalerMetalFx, T("temporal, Apple GPUs"));
             choice(BbSettings::UpscalerFsr3, T("temporal"));
             choice(BbSettings::UpscalerFsr4, T("temporal, best quality, heavier"));
             choice(BbSettings::UpscalerFsr411, T("temporal"));
@@ -846,6 +854,9 @@ void FpsCounter() {
                 : s.upscaler == BbSettings::UpscalerDlss ? "DLSS"
                 : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
                 : s.upscaler == BbSettings::UpscalerStretch ? "Bilinear"
+                : s.upscaler == BbSettings::UpscalerNearest ? "Nearest"
+                : s.upscaler == BbSettings::UpscalerFsr1 ? "FSR 1"
+                : s.upscaler == BbSettings::UpscalerMetalFxSpatial ? "MetalFX spatial"
                                                          : "");
     // bbport: what this session renders and, for harness runs, who started it and why
     // (BB_RUN_COMMENT from the queue wrapper, BB_RUN_ID from benchmark-run.py).

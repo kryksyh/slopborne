@@ -233,6 +233,17 @@ vk::ImageView ObjectMotion::PrepareRead(vk::CommandBuffer cmdbuf, u32 width, u32
                                         bool& valid) {
     EnsureImage(std::max(image_width, 1u), std::max(image_height, 1u));
     valid = written && width == image_width && height == image_height;
+    // bbport: say once per size pair why recorded object vectors are not used (a padded
+    // G-buffer differs from the scene size the motion pass works at).
+    if (written && !valid) {
+        static u32 logged_w, logged_h, logged_iw, logged_ih;
+        if (logged_w != width || logged_h != height || logged_iw != image_width ||
+            logged_ih != image_height) {
+            logged_w = width, logged_h = height, logged_iw = image_width, logged_ih = image_height;
+            std::printf("Object motion: vectors unused, object image %ux%u vs scene %ux%u\n",
+                        image_width, image_height, width, height);
+        }
+    }
     const vk::ImageMemoryBarrier2 barrier{
         .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
         .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,

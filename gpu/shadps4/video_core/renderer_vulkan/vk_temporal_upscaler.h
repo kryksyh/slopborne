@@ -20,6 +20,7 @@
 
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
 #include "video_core/renderer_vulkan/vk_metalfx.h"
@@ -275,6 +276,12 @@ private:
     bool fsr4_failed = false;
     bool dlss_failed = false;
     std::unique_ptr<MetalFx> metalfx;
+    /// bbport: FSR 1 (EASU + RCAS) for the spatial upscaler choice; made on first use.
+    HostPasses::FsrPass fsr1;
+    bool fsr1_created{};
+    void ScaledDebugView(vk::CommandBuffer cmdbuf, u32 ow, u32 oh, bool has_reactive);
+    bool ScaleSpatially(vk::CommandBuffer& cmdbuf, vk::Image color_image, vk::ImageView color_view,
+                        u32 source_width, u32 source_height, u32 w, u32 h, u32 ow, u32 oh);
     bool metalfx_failed = false;
     VideoCore::UniqueImage motion_image;
     VideoCore::UniqueImage output_image;

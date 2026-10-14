@@ -5,6 +5,7 @@
 #import <MetalFX/MetalFX.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -13,6 +14,17 @@
 #include <vulkan/vulkan_metal.h>
 
 namespace Vulkan {
+
+// Auto exposure off: its network compile (MPSGraph) threw a filesystem error inside Apple's
+// framework when the HDR scaler was made, ending the game (native 1080p, 2026-10-14).
+// BB_METALFX_AUTO_EXPOSURE=1 turns it back on.
+static bool AutoExposure() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_METALFX_AUTO_EXPOSURE");
+        return env && env[0] == '1';
+    }();
+    return on;
+}
 
 struct MetalFx::Impl {
     vk::Device device;
@@ -25,6 +37,8 @@ struct MetalFx::Impl {
 
     id<MTLFXTemporalScaler> scaler;
     MTLFXTemporalScalerDescriptor* key;
+    id<MTLFXSpatialScaler> spatial;
+    MTLFXSpatialScalerDescriptor* spatial_key;
     id<MTLTexture> zero_mask;
     bool usage_checked{};
 
@@ -67,7 +81,7 @@ struct MetalFx::Impl {
             key.motionTextureFormat == motion && key.outputTextureFormat == output &&
             key.inputWidth == width && key.inputHeight == height &&
             key.outputWidth == out_width && key.outputHeight == out_height &&
-            key.autoExposureEnabled == hdr &&
+            key.autoExposureEnabled == (hdr && AutoExposure()) &&
             key.reactiveMaskTextureEnabled == (reactive != MTLPixelFormatInvalid)) {
             return true;
         }
@@ -80,7 +94,7 @@ struct MetalFx::Impl {
         desc.inputHeight = height;
         desc.outputWidth = out_width;
         desc.outputHeight = out_height;
-        desc.autoExposureEnabled = hdr;
+        desc.autoExposureEnabled = hdr && AutoExposure();
         // The scene may fill only part of the color image (the patched render size).
         desc.inputContentPropertiesEnabled = YES;
         desc.inputContentMinScale = 1.0f;
@@ -102,7 +116,7 @@ struct MetalFx::Impl {
                     (unsigned long)width, (unsigned long)height, (unsigned long)out_width,
                     (unsigned long)out_height, (unsigned long)color, (unsigned long)depth,
                     (unsigned long)motion, (unsigned long)output,
-                    hdr ? " (HDR, auto exposure)" : "",
+                    hdr ? (AutoExposure() ? " (HDR, auto exposure)" : " (HDR)") : "",
                     reactive != MTLPixelFormatInvalid ? " (reactive mask)" : "");
         return true;
     }
@@ -243,6 +257,64 @@ bool MetalFx::Encode(const Frame& frame, u64 ready) {
         scaler.motionVectorScaleY = 1.0f;
         scaler.depthReversed = NO;
         scaler.reset = frame.reset;
+        id<MTLCommandBuffer> command = [impl->queue commandBuffer];
+        [command encodeWaitForEvent:impl->event value:ready];
+        [scaler encodeToCommandBuffer:command];
+        [command encodeSignalEvent:impl->event value:ready + 1];
+        [command commit];
+        return true;
+    }
+}
+
+bool MetalFx::EncodeSpatial(vk::Image color_image, u32 width, u32 height, vk::Image output_image,
+                            u32 out_width, u32 out_height, u64 ready) {
+    @autoreleasepool {
+        id<MTLTexture> color = impl->Texture(color_image);
+        id<MTLTexture> output = impl->Texture(output_image);
+        if (!color || !output) {
+            std::printf("MetalFX spatial: a Vulkan image has no Metal texture\n");
+            return false;
+        }
+        MTLFXSpatialScalerDescriptor* key = impl->spatial_key;
+        if (!impl->spatial || key.colorTextureFormat != color.pixelFormat ||
+            key.outputTextureFormat != output.pixelFormat || key.inputWidth != color.width ||
+            key.inputHeight != color.height || key.outputWidth != out_width ||
+            key.outputHeight != out_height) {
+            MTLFXSpatialScalerDescriptor* desc = [MTLFXSpatialScalerDescriptor new];
+            desc.colorTextureFormat = color.pixelFormat;
+            desc.outputTextureFormat = output.pixelFormat;
+            desc.inputWidth = color.width;
+            desc.inputHeight = color.height;
+            desc.outputWidth = out_width;
+            desc.outputHeight = out_height;
+            // The game's final 8-bit frame is display-encoded.
+            desc.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;
+            impl->spatial = [desc newSpatialScalerWithDevice:impl->mtl_device];
+            impl->spatial_key = desc;
+            if (!impl->spatial) {
+                std::printf("MetalFX spatial: scaler creation failed\n");
+                return false;
+            }
+            const auto missing = [](id<MTLTexture> texture, MTLTextureUsage needed) {
+                return (texture.usage & needed) != needed;
+            };
+            if (missing(color, impl->spatial.colorTextureUsage) ||
+                missing(output, impl->spatial.outputTextureUsage)) {
+                std::printf("MetalFX spatial: texture usage missing (color %lu/%lu output %lu/%lu)\n",
+                            (unsigned long)color.usage, (unsigned long)impl->spatial.colorTextureUsage,
+                            (unsigned long)output.usage,
+                            (unsigned long)impl->spatial.outputTextureUsage);
+                impl->spatial = nil;
+                return false;
+            }
+            std::printf("MetalFX: spatial scaler %ux%u -> %ux%u\n", width, height, out_width,
+                        out_height);
+        }
+        id<MTLFXSpatialScaler> scaler = impl->spatial;
+        scaler.colorTexture = color;
+        scaler.outputTexture = output;
+        scaler.inputContentWidth = width;
+        scaler.inputContentHeight = height;
         id<MTLCommandBuffer> command = [impl->queue commandBuffer];
         [command encodeWaitForEvent:impl->event value:ready];
         [scaler encodeToCommandBuffer:command];
