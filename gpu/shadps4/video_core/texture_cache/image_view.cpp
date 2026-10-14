@@ -129,6 +129,22 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         format = image.info.pixel_format;
         aspect = vk::ImageAspectFlagBits::eStencil;
     }
+    // bbport: a depth/stencil image viewed through an unrelated color format (RGBA16F over
+    // D32S8, seen after an autosave) is invalid in Vulkan, and Metal aborts the process on it
+    // ("Texture Creation source texture pixelFormat ... not compatible"). Read the depth instead.
+    if ((image.aspect_mask & (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) &&
+        format != image.info.pixel_format) {
+        static bool logged;
+        if (!logged) {
+            logged = true;
+            LOG_WARNING(Render_Vulkan, "{} view of depth image {} at {:#x}: read as its depth",
+                        vk::to_string(format), vk::to_string(image.info.pixel_format),
+                        image.info.guest_address);
+        }
+        format = image.info.pixel_format;
+        aspect = image.aspect_mask & vk::ImageAspectFlagBits::eDepth ? vk::ImageAspectFlagBits::eDepth
+                                                                      : vk::ImageAspectFlagBits::eStencil;
+    }
 
     // bbport: storage writes never convert to sRGB and sRGB formats cannot be storage images
     // (AMD's driver loses the device on such a view; NVIDIA tolerates it): write through the
