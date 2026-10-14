@@ -63,10 +63,15 @@ cp patches/Bloodborne.xml "$contents/Resources/port/patches/"
 # The pipeline list (scripts/export_pipelines.py): built at first start from the player's game files.
 # Export it from ONE cache made by the build being packaged (permutation numbers are local to a
 # cache, and entries from other builds may not rebuild), e.g. replays into an empty cache.
+# Without one, the list in the repo: exported from a play-through (Iosefka's Clinic, Central
+# Yharnam). A fresh install without a list draws stand-ins for seconds in every new area.
 pipelines=${BB_PIPELINES:-out/macos/pipelines}
 if [[ -d $pipelines ]]; then
     mkdir -p "$contents/Resources/port/pipelines"
     cp "$pipelines"/*.key "$pipelines"/*.meta "$pipelines"/*.fetch "$contents/Resources/port/pipelines/"
+elif [[ -f packaging/macos/pipelines.tar.xz ]]; then
+    mkdir -p "$contents/Resources/port/pipelines"
+    tar -xJf packaging/macos/pipelines.tar.xz -C "$contents/Resources/port/pipelines"
 fi
 cp "$settings" "$contents/Resources/bbport.ini"
 cp "$probe" "$contents/MacOS/bb-probe"
