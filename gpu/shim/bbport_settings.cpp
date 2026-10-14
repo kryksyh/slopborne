@@ -88,6 +88,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_invert_jitter = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
+    } else if (key == "frame_limit") {
+        v.frame_limit = std::clamp(i, 30, 120); // below 30 the game plays in slow motion
     } else if (key == "render_res") {
         for (int r = 0; r < RenderResCount; ++r) {
             if (value == std::to_string(RenderWidths[r]) + "x" + std::to_string(RenderHeights[r])) {
@@ -194,6 +196,22 @@ void Load() {
         v.startup_effects[e] = v.effects[e];
     }
     v.startup_model_lod = v.model_lod;
+    v.startup_frame_limit = v.frame_limit;
+    // The present thread reads BB_FPS_LIMIT (EmulatorSettings::GetFrameLimit); an explicit one
+    // (benchmarks, the launcher's --fps) wins over the menu's choice. One written from the menu
+    // is marked, so the in-game restart (which inherits this environment) takes the new choice.
+    const char* limit_env = std::getenv("BB_FPS_LIMIT");
+    const char* from_menu = std::getenv("BB_FPS_LIMIT_FROM_MENU");
+    if (!limit_env || (from_menu && from_menu[0] == '1')) {
+        const std::string limit = std::to_string(v.frame_limit.load());
+#ifdef _WIN32
+        _putenv_s("BB_FPS_LIMIT", limit.c_str());
+        _putenv_s("BB_FPS_LIMIT_FROM_MENU", "1");
+#else
+        setenv("BB_FPS_LIMIT", limit.c_str(), 1);
+        setenv("BB_FPS_LIMIT_FROM_MENU", "1", 1);
+#endif
+    }
     if (const char* env = std::getenv("BB_ASYNC_PIPELINES")) {
         v.async_pipelines = env[0] != '0';
     }
@@ -323,6 +341,7 @@ void Save() {
             }
         }
     }
+    std::fprintf(file, "frame_limit=%d\n", v.frame_limit.load());
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nrender_res=%dx%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res],
                  RenderWidths[v.render_res], RenderHeights[v.render_res]);

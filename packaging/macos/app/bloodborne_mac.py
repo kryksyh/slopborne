@@ -36,7 +36,7 @@ CONFIG = DATA / 'config.json'
 USER = DATA / 'user'
 BACKUPS = DATA / 'backups'
 LOGS = DATA / 'logs'
-DEFAULTS = {'game_dir': '', 'fps_limit': 30, 'fullscreen': False}
+DEFAULTS = {'game_dir': '', 'fullscreen': False}
 
 RU = {
     'Choose your Bloodborne game folder (the one with eboot.bin).':
@@ -286,9 +286,8 @@ def game_environment(config, game):
     # buffer reads.
     env.setdefault('BB_TESS_FUSION', '1')
     env.setdefault('BB_BOUNDED_BUFFER_READS', '1')
-    # Frame-time game timing with an even cap: 30 FPS keeps 33.3 ms pacing on Apple Silicon.
+    # Frame-time game timing; the cap is the in-game menu's frame_limit (bbport.ini, 30 by default).
     env.setdefault('BB_FPS', 'uncap')
-    env.setdefault('BB_FPS_LIMIT', str(config['fps_limit']))
     env.setdefault('BB_FULLSCREEN', '1' if config['fullscreen'] else '0')
     return env
 

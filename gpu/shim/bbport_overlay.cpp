@@ -333,6 +333,27 @@ void DisplayMenu() {
     Hint(T("Size of the final picture and the interface."));
     Checkbox(T("FPS counter in the corner"), s.show_fps);
 
+    ImGui::SeparatorText(T("Frame rate (after restart)"));
+    // No cap below 30: the game advances at most one 30 FPS frame (33.3 ms) per frame, so it
+    // plays in slow motion below that (a run measured 8.5 s uncapped, 10.5 s at 25 FPS).
+    static constexpr int limits[] = {30, 40, 60, 120};
+    static const char* limit_labels[] = {T("30 FPS (as on PS4)"), T("40 FPS"), T("60 FPS"),
+                                         T("Uncapped (up to 120 FPS)")};
+    int limit_index = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (limits[i] == s.frame_limit) limit_index = i;
+    }
+    if (ImGui::BeginCombo(T("Frame rate limit"), limit_labels[limit_index])) {
+        for (int i = 0; i < 4; ++i) {
+            if (ImGui::Selectable(limit_labels[i], i == limit_index)) {
+                Store(s.frame_limit, limits[i], true);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    Hint(T("A rate the display's refresh divides evenly looks smoothest. Below 30 FPS the game "
+           "runs in slow motion; above 120 its movement timing breaks."));
+
     ImGui::SeparatorText(T("Render resolution"));
     if (s.output_res == BbSettings::OutputDefault) {
         static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720",
@@ -683,6 +704,7 @@ bool NeedsRestart() {
                    s.controller_map != s.startup_controller_map ||
                    s.object_motion != s.startup_object_motion ||
                    s.model_lod != s.startup_model_lod ||
+                   s.frame_limit != s.startup_frame_limit ||
                    s.live_resolution != s.startup_live_resolution ||
                    s.async_pipelines != s.startup_async_pipelines ||
                    BbSettings::ResolutionNeedsRestart() ||

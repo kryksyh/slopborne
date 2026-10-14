@@ -99,6 +99,8 @@ struct Values {
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};
     std::atomic<int> model_lod{0}; ///< -2 highest .. 2 lowest, 0 the game's
+    /// Frames per second at most (30, 40, 60, 120); read at start. BB_FPS_LIMIT overrides.
+    std::atomic<int> frame_limit{30};
     std::atomic<int> output_res{OutputDefault}; ///< index into OutputWidths
     std::atomic<int> render_res{RenderNative}; ///< index into RenderWidths; on restart
     /// The upscaler chosen before a reduced render_res, restored at native; -1 none.
@@ -124,6 +126,7 @@ struct Values {
     bool startup_object_motion = true;
     bool startup_effects[EffectCount]{};
     int startup_model_lod = 0;
+    int startup_frame_limit = 30;
     int startup_output_res = OutputDefault;
     int startup_render_res = RenderNative;
     int startup_live_resolution = 0;
