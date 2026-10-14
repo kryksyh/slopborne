@@ -4,10 +4,27 @@
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace Shader::Backend::SPIRV {
 
+// bbport: BB_SPIRV_PRECISE=vertex keeps exact ("precise") float math only in the stages whose
+// results must match bit for bit across passes (positions: depth prepass, G-buffer, shadows);
+// fragment and compute shaders get plain operations Metal may fuse and reorder. Experiment after
+// Wooloomooloo2/bloodborne_mac_port fe06953 (39 -> 60 FPS there); needs a fresh shader cache.
+static bool Relaxed(const EmitContext& ctx) {
+    static const bool vertex_only = [] {
+        const char* env = std::getenv("BB_SPIRV_PRECISE");
+        return env && !std::strcmp(env, "vertex");
+    }();
+    return vertex_only && (ctx.sw_stage == SwStage::Fragment || ctx.sw_stage == SwStage::Compute);
+}
+
 Id Decorate(EmitContext& ctx, IR::Inst* inst, Id op) {
-    ctx.Decorate(op, spv::Decoration::NoContraction);
+    if (!Relaxed(ctx)) {
+        ctx.Decorate(op, spv::Decoration::NoContraction);
+    }
     return op;
 }
 
@@ -23,7 +40,7 @@ Id EmitFPAdd32(EmitContext& ctx, IR::Inst* inst, Id a, Id b) {
     // SPIRV-Cross lowers NoContraction to optnone helpers on Metal. Emit the
     // exact FMA from that helper directly, retaining its rounding boundary.
     // The profile enables this only on Metal with strict FP32 preservation.
-    if (ctx.profile.metal_inline_arithmetic) {
+    if (ctx.profile.metal_inline_arithmetic && !Relaxed(ctx)) {
         return Decorate(ctx, inst, ctx.OpFma(ctx.F32[1], ctx.ConstF32(1.0f), a, b));
     }
     return Decorate(ctx, inst, ctx.OpFAdd(ctx.F32[1], a, b));
@@ -34,7 +51,7 @@ Id EmitFPAdd64(EmitContext& ctx, IR::Inst* inst, Id a, Id b) {
 }
 
 Id EmitFPSub32(EmitContext& ctx, IR::Inst* inst, Id a, Id b) {
-    if (ctx.profile.metal_inline_arithmetic) {
+    if (ctx.profile.metal_inline_arithmetic && !Relaxed(ctx)) {
         return Decorate(ctx, inst, ctx.OpFma(ctx.F32[1], ctx.ConstF32(-1.0f), b, a));
     }
     return Decorate(ctx, inst, ctx.OpFSub(ctx.F32[1], a, b));
@@ -87,7 +104,7 @@ Id EmitFPMedTri32(EmitContext& ctx, Id a, Id b, Id c) {
 }
 
 Id EmitFPMul32(EmitContext& ctx, IR::Inst* inst, Id a, Id b) {
-    if (ctx.profile.metal_inline_arithmetic) {
+    if (ctx.profile.metal_inline_arithmetic && !Relaxed(ctx)) {
         return Decorate(ctx, inst, ctx.OpFma(ctx.F32[1], a, b, ctx.f32_zero_value));
     }
     return Decorate(ctx, inst, ctx.OpFMul(ctx.F32[1], a, b));
