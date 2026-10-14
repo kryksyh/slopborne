@@ -117,7 +117,7 @@ On macOS:
 unpack the zip, open `Bloodborne.app` and choose your game folder (the one with
 `eboot.bin`) when it asks. All settings are in the in-game menu.
 
-**The game build is not signed**, so you have to allow to run in system settings, or use `xattr -cr Bloodborne.app` in Terminal.
+**The app is signed and notarized by Apple**: macOS only asks once whether to open an app downloaded from the internet.
 
 **DLC.** The Game of the Year edition (CUSA03173) already has The Old Hunters. With a base-game
 dump, also dump your add-ons: each is a folder named like `SPEXPANSIONDLC03` with only

@@ -18,9 +18,8 @@ Requirements
 First start
 -----------
 1. Move Bloodborne.app to your Applications folder (or anywhere you like).
-2. Double-click it. macOS blocks apps from unidentified developers the first time:
-   open System Settings > Privacy & Security, scroll down to "Bloodborne was blocked",
-   click "Open Anyway" and confirm with your password. You only do this once.
+2. Double-click it. The app is signed and notarized: macOS only asks once whether to open
+   an app downloaded from the internet. Click Open.
 3. Choose your Bloodborne game folder (the one that contains eboot.bin). The app remembers it.
 4. The first start prepares the game files and compiles shaders: the first minutes can stutter.
 
