@@ -321,7 +321,8 @@ static vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat form
 static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandBuffer cmdbuf,
                     vk::Image image, vk::ImageLayout layout, u32 w, u32 h, const char* name,
                     int index, u32 bytes_per_pixel = 4,
-                    vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor) {
+                    vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor,
+                    FILE* stream = nullptr) {
     const VkBufferCreateInfo buffer_ci{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                        .size = VkDeviceSize(w) * h * bytes_per_pixel,
                                        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -343,14 +344,54 @@ static void DumpRaw(const Instance& instance, Scheduler& scheduler, vk::CommandB
     std::snprintf(path, sizeof(path), "%s/%s_%03d_%ux%u.raw", dir && *dir ? dir : "out/dump", name,
                   index, w, h);
     scheduler.DeferPriorityOperation([allocator = instance.GetAllocator(), buffer, allocation, info,
-                                      size = buffer_ci.size, file = std::string{path}] {
+                                      size = buffer_ci.size, file = std::string{path}, stream] {
         vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
-        if (FILE* f = std::fopen(file.c_str(), "wb")) {
+        if (stream) {
+            std::fwrite(info.pMappedData, 1, size, stream);
+        } else if (FILE* f = std::fopen(file.c_str(), "wb")) {
             std::fwrite(info.pMappedData, 1, size, f);
             std::fclose(f);
         }
         vmaDestroyBuffer(allocator, buffer, allocation);
     });
+}
+
+// bbport: BB_VIDEO_DUMP=<file>: every presented frame is piped to ffmpeg (feature videos from
+// pad replays). Below 30 FPS the game advances 33.3 ms per frame, so 30 FPS playback is real time
+// however slow the capture runs. Frames of another size than the first are skipped. With
+// BB_PAD_REPLAY, only the frames while the replay plays are recorded.
+extern "C" int runtime_pad_replaying(void); // bb-probe (runtime_pad.c)
+static FILE* VideoDump(u32 w, u32 h, vk::Format format) {
+    static const bool replay_only = std::getenv("BB_PAD_REPLAY") != nullptr;
+    if (replay_only && !runtime_pad_replaying()) {
+        return nullptr;
+    }
+    static u32 width = w, height = h;
+    static const char* pixels = format == vk::Format::eB8G8R8A8Unorm ||
+                                        format == vk::Format::eB8G8R8A8Srgb
+                                    ? "bgra"
+                                    : "rgba";
+    static FILE* pipe = [] () -> FILE* {
+        const char* path = std::getenv("BB_VIDEO_DUMP");
+        if (!path || !*path) {
+            return nullptr;
+        }
+#ifdef _WIN32
+        constexpr char quote = '"'; // cmd.exe does not strip single quotes
+#else
+        constexpr char quote = '\'';
+#endif
+        const std::string command = fmt::format(
+            "ffmpeg -loglevel error -y -f rawvideo -pix_fmt {} -s {}x{} -r 30 -i - -c:v libx264 "
+            "-preset veryfast -crf 14 -pix_fmt yuv420p {}{}{}",
+            pixels, width, height, quote, path, quote);
+#ifdef _WIN32
+        return _popen(command.c_str(), "wb");
+#else
+        return popen(command.c_str(), "w");
+#endif
+    }();
+    return pipe && w == width && h == height ? pipe : nullptr;
 }
 
 // bbport: BB_FLASH_LOG=1: a 16x16 grid of texels of every presented frame, checked once the GPU
@@ -631,6 +672,17 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
                 frame->width, frame->height, "output", frame_dump_index);
         ++frame_dump_index;
+    }
+    if (FILE* video = VideoDump(frame->width, frame->height,
+                                     swapchain.GetSurfaceFormat().format)) {
+        const vk::MemoryBarrier2 done{.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                                      .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                                      .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+                                      .dstAccessMask = vk::AccessFlagBits2::eTransferRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &done});
+        DumpRaw(instance, draw_scheduler, cmdbuf, frame->image, vk::ImageLayout::eGeneral,
+                frame->width, frame->height, "video", 0, 4, vk::ImageAspectFlagBits::eColor,
+                video);
     }
     static const bool flash_log = [] {
         const char* env = std::getenv("BB_FLASH_LOG");

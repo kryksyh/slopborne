@@ -617,6 +617,8 @@ static void record_sample(const PadData *d) {
             s.axes[3],s.l2,s.r2,(unsigned long long)s.read);
     fflush(record_file);
 }
+/* 1 while a replay plays: BB_VIDEO_DUMP records only then (bbgpu's presenter). */
+int runtime_pad_replaying(void) { return replay_armed==1; }
 static PadSample *replay; static size_t replay_count, replay_next;
 static int replay_by_read; static uint64_t replay_start_read;
 static void replay_sample(PadData *d) {
@@ -640,7 +642,10 @@ static void replay_sample(PadData *d) {
                 if (replay_count==cap && !(replay=realloc(replay,(cap=cap ? cap*2 : 1024)*sizeof(*replay)))) break;
                 replay[replay_count++]=s;
             }
-            replay_by_read=replay_count && (replay[replay_count-1].read>0);
+            /* BB_PAD_REPLAY_BY_TIME=1: follow the recorded times instead; frame lengths vary,
+             * so over a long route the read index drifts away from the recorded path. */
+            const char *by_time=getenv("BB_PAD_REPLAY_BY_TIME");
+            replay_by_read=replay_count && (replay[replay_count-1].read>0) && !(by_time && *by_time=='1');
             if (f) fclose(f);
             printf("Runtime: pad replay of %zu samples from %s\n",replay_count,path ? path : "(unset)");
         }
