@@ -67,12 +67,18 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
-/// Scene sizes for the 1080p output (render_res): the reduced ones are patched at start
-/// (patches.py) and an upscaler fills 1080p.
-inline constexpr int RenderWidths[] = {1920, 1600, 1280, 960, 640, 428};
-inline constexpr int RenderHeights[] = {1080, 900, 720, 540, 360, 240};
-inline constexpr int RenderResCount = 6;
-inline constexpr int RenderNative = 0;
+/// Scene sizes (render_res), offered when smaller than the output: patched at start
+/// (patches.py), and an upscaler fills the output. RenderNative is the output's own size.
+/// The smallest is 384x216, not 428x240: that width broke the scene after reloads (2026-10-14).
+inline constexpr int RenderWidths[] = {3840, 2560, 1920, 1600, 1280, 960, 640, 384};
+inline constexpr int RenderHeights[] = {2160, 1440, 1080, 900, 720, 540, 360, 216};
+inline constexpr int RenderResCount = 8;
+inline constexpr int RenderNative = -1;
+/// The scene size is smaller than the output (all sizes are 16:9).
+inline bool RenderFits(int render_res, int output_res) {
+    return render_res >= 0 && render_res < RenderResCount &&
+           RenderWidths[render_res] < OutputWidths[output_res];
+}
 
 
 struct Values {

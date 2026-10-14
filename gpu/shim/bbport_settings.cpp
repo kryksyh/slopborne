@@ -99,10 +99,14 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "frame_limit") {
         v.frame_limit = std::clamp(i, 30, 120); // below 30 the game plays in slow motion
     } else if (key == "render_res") {
+        v.render_res = RenderNative;
         for (int r = 0; r < RenderResCount; ++r) {
             if (value == std::to_string(RenderWidths[r]) + "x" + std::to_string(RenderHeights[r])) {
                 v.render_res = r;
             }
+        }
+        if (value == "428x240") {
+            v.render_res = RenderResCount - 1; // the former smallest size (now 384x216)
         }
     } else if (key == "native_upscaler") {
         v.native_upscaler = -1;
@@ -198,6 +202,19 @@ void Load() {
         }
     }
     v.startup_preset = v.preset;
+    // A size the output does not exceed is native; presets are gone from the menu (exact sizes
+    // at every output), so a saved one no longer shrinks a live session.
+    if (!RenderFits(v.render_res, v.output_res)) {
+        v.render_res = RenderNative;
+    }
+    v.preset = NativeAA;
+    v.startup_preset = v.preset;
+    // A smaller scene with the upscaler off (or TAA, a native-only mode) is drawn with bilinear
+    // stretch: what the menu shows and what the launcher patched for.
+    if (v.render_res != RenderNative &&
+        (v.upscaler == UpscalerOff || v.upscaler == UpscalerTaa)) {
+        v.upscaler = UpscalerStretch;
+    }
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     for (int e = 0; e < EffectCount; ++e) {
@@ -358,9 +375,14 @@ void Save() {
     std::fprintf(file, "online=%d\nonline_npid=%s\nonline_password=%s\nonline_server=%s\n",
                  int(v.online.load()), v.online_npid.c_str(), v.online_password.c_str(),
                  v.online_server.c_str());
-    std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nrender_res=%dx%d\n", v.model_lod.load(),
-                 OutputWidths[v.output_res], OutputHeights[v.output_res],
-                 RenderWidths[v.render_res], RenderHeights[v.render_res]);
+    std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\n", v.model_lod.load(),
+                 OutputWidths[v.output_res], OutputHeights[v.output_res]);
+    if (v.render_res == RenderNative) {
+        std::fprintf(file, "render_res=native\n");
+    } else {
+        std::fprintf(file, "render_res=%dx%d\n", RenderWidths[v.render_res],
+                     RenderHeights[v.render_res]);
+    }
     if (v.native_upscaler >= 0) {
         std::fprintf(file, "native_upscaler=%s\n", UpscalerName(v.native_upscaler));
     }

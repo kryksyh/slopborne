@@ -129,8 +129,6 @@
  "Размер готового кадра и интерфейса меняется на границе следующего кадра. Пресет задаёт "
  "размер сцены относительно вывода: 4K Performance = 1920x1080. Смена размера сбрасывает "
  "историю FSR и может вызвать короткую паузу."},
-{"1920 x 1080 (native)",
- "1920 x 1080 (родное)"},
 {"Render resolution",
  "Разрешение рендера"},
 {"Scene size at 1080p output, patched at game start: the smaller sizes are much faster and the "
@@ -350,3 +348,4 @@
 {"Password", "Пароль"},
 {"Server", "Сервер"},
 {"Free account: shadnet.shadps4.net", "Бесплатный аккаунт: shadnet.shadps4.net"},
+{"(original)", "(оригинал)"},

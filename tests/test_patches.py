@@ -76,26 +76,33 @@ class NativeUiTests(unittest.TestCase):
         self.assertIsNone(render_size({'upscaler': 'off', 'preset': '3'}))
 
     def test_output_other_than_1080p_scales_the_scene(self):
-        self.assertIsNone(scaled_sizes({'output_res': '1920x1080', 'preset': '2'}))
-        # Steam Deck: below 1080p the scene is still the preset's fraction of the output.
-        for preset, expected in [(0, (1280, 720)), (2, (752, 424)), (4, (426, 240))]:
-            with self.subTest(preset=preset):
-                self.assertEqual(scaled_sizes({'output_res': '1280x720', 'preset': str(preset)}),
-                                 (expected, (1280, 720)))
-        self.assertEqual(scaled_sizes({'output_res': '3840x2160', 'preset': '3'}),
+        self.assertIsNone(scaled_sizes({'output_res': '1920x1080'}))
+        # Other outputs: the menu's exact size, or at native the output's own size.
+        self.assertEqual(scaled_sizes({'output_res': '1280x720'}), ((1280, 720), (1280, 720)))
+        self.assertEqual(scaled_sizes({'output_res': '1280x720', 'render_res': '640x360'}),
+                         ((640, 360), (1280, 720)))
+        self.assertEqual(scaled_sizes({'output_res': '2560x1440', 'render_res': '384x216'}),
+                         ((384, 216), (2560, 1440)))
+        # 1920x1080 at a larger output: 1916x1078, apart from the UI's 1920x1080 space.
+        self.assertEqual(scaled_sizes({'output_res': '3840x2160', 'render_res': '1920x1080'}),
                          ((1916, 1078), (3840, 2160)))
+        # A size the output does not exceed is native.
+        self.assertEqual(scaled_sizes({'output_res': '1280x720', 'render_res': '1600x900'}),
+                         ((1280, 720), (1280, 720)))
         # TAA is native-only and uses the live host targets.
-        self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa', 'preset': '3'}))
+        self.assertIsNone(scaled_sizes({'output_res': '1280x720', 'upscaler': 'taa'}))
 
     def test_menu_render_size_at_1080p(self):
         for size, expected in [('1600x900', (1600, 900)), ('1280x720', (1280, 720)), ('960x540', (960, 540)),
-                               ('640x360', (640, 360)), ('428x240', (428, 240))]:
+                               ('640x360', (640, 360)), ('384x216', (384, 216)), ('428x240', (384, 216))]:
             with self.subTest(size=size):
                 self.assertEqual(scaled_sizes({'output_res': '1920x1080', 'upscaler': 'metalfx',
                                                'render_res': size}), (expected, (1920, 1080)))
         self.assertIsNone(scaled_sizes({'render_res': '1920x1080'}))
-        self.assertIsNone(scaled_sizes({'render_res': '1280x720', 'upscaler': 'off'}))
-        self.assertIsNone(scaled_sizes({'render_res': '1280x720', 'upscaler': 'taa'}))
+        # Upscaler off (or TAA) with a smaller scene: bilinear stretch, as the menu shows it.
+        for upscaler in ('off', 'taa'):
+            self.assertEqual(scaled_sizes({'render_res': '1280x720', 'upscaler': upscaler}),
+                             ((1280, 720), (1920, 1080)))
         # Other outputs keep the preset's fraction.
         self.assertEqual(scaled_sizes({'output_res': '1280x720', 'preset': '0', 'render_res': '1600x900'}),
                          ((1280, 720), (1280, 720)))

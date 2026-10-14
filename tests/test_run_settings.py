@@ -26,7 +26,7 @@ class RestartResolutionTests(unittest.TestCase):
             (out / 'eboot.elf').write_bytes(elf)
             (data / 'eboot.bin').touch()
             config = data / 'bbport.ini'
-            config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra)
+            config.write_text('upscaler=fsr3\noutput_res=1280x720\n' + ini_extra)
             if caps is not None:  # the GPU check next to the probe (live_resolution=auto)
                 tool = data / 'bb-gpu-capabilities'
                 tool.write_text(f'#!/bin/sh\necho {caps}\n')
@@ -47,7 +47,8 @@ class RestartResolutionTests(unittest.TestCase):
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
                 'if stage<2:\n'
-                '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
+                '    config.write_text("upscaler=fsr3\\nrender_res="+'
+                '("384x216" if stage==0 else "native")+"\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
                 '    os.environ["BB_TEST_STAGE"]=str(stage+1)\n'
                 '    os.execlp("bash", "bash", "run.sh")\n')
@@ -72,28 +73,28 @@ class RestartResolutionTests(unittest.TestCase):
             return [json.loads(line) for line in (data / 'environments').read_text().splitlines()]
 
     def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
-        rows = self.run_restarts()
-        # 720p Quality, 720p Ultra Performance after a restart, then 1080p (live host targets).
-        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', None])
+        rows = self.run_restarts(ini_extra='render_res=960x540\n')
+        # 720p output: 960x540, 384x216 after a restart, then 1080p native (live host targets).
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['960x540', '384x216', None])
         self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', None])
         self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', None])
 
     def test_live_resolution_keeps_guest_sizes_native(self):
         rows = self.run_restarts(live=True)
-        self.assertTrue(all(row['BB_RENDER_RES'] is None for row in rows))
-        self.assertTrue(all(row['BB_OUTPUT_RES'] is None for row in rows))
-        self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
+        # Native launches stay live; the restart's exact 384x216 is patched all the same.
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], [None, '384x216', None])
+        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], [None, '1280x720', None])
 
     def test_live_resolution_setting_and_gpu_check(self):
         # Only the first launch matters here: the probe rewrites bbport.ini for the restarts.
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=1\n')[0]['BB_RENDER_RES'])
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1)[0]['BB_RENDER_RES'],
-                         '854x480')
+                         '1280x720')
         # Unset: off (the startup patch), whatever the GPU; auto asks the GPU check.
-        self.assertEqual(self.run_restarts(caps=1)[0]['BB_RENDER_RES'], '854x480')
+        self.assertEqual(self.run_restarts(caps=1)[0]['BB_RENDER_RES'], '1280x720')
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1)[0]['BB_RENDER_RES'])
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
-                         '854x480')
+                         '1280x720')
 
     def test_menu_render_size_is_patched_even_with_live_resolution(self):
         row = self.run_restarts(ini_extra='output_res=1920x1080\nrender_res=1600x900\n'
@@ -104,7 +105,7 @@ class RestartResolutionTests(unittest.TestCase):
     def test_live_resolution_without_sed_or_grep(self):
         # A missing sed ended run.sh (exit 127) before the game in the AppImage on NixOS.
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1,
-                                           bare_path=True)[0]['BB_RENDER_RES'], '854x480')
+                                           bare_path=True)[0]['BB_RENDER_RES'], '1280x720')
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1,
                                             bare_path=True)[0]['BB_RENDER_RES'])
 

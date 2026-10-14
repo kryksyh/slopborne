@@ -175,7 +175,10 @@ def output_size(settings):
     return OUTPUT_SIZE
 
 
-RENDER_SIZES={'1600x900':(1600,900),'1280x720':(1280,720),'960x540':(960,540),'640x360':(640,360),'428x240':(428,240)}
+# Widths are multiples of 64: at 428x240 the scene broke into scrambled tiles after the third death
+# and reload (2026-10-14); 384x216 replaced it, and a saved 428x240 means 384x216.
+RENDER_SIZES={'3840x2160':(3840,2160),'2560x1440':(2560,1440),'1920x1080':(1920,1080),'1600x900':(1600,900),'1280x720':(1280,720),'960x540':(960,540),'640x360':(640,360),'384x216':(384,216),
+              '428x240':(384,216)}
 
 
 # A picture filter at native size: the scene a hair smaller than the UI space, so the UI is
@@ -188,34 +191,29 @@ def filter_on(settings):
 
 
 def menu_render_size(settings):
-    """The menu's reduced scene size for the 1080p output (render_res), or None. It is patched at
-    start whatever live_resolution says: host-target scaling misses most of the scene's cost.
-    A Filters-tab filter needs a patched scene too: the reduced size, or FILTER_NATIVE_SIZE."""
-    if output_size(settings)!=OUTPUT_SIZE:
-        return None
+    """The menu's scene size (render_res) when it is smaller than the output, or None (native).
+    It is patched at start whatever live_resolution says: host-target scaling misses most of the
+    scene's cost. A Filters-tab filter at 1080p needs a patched scene too: FILTER_NATIVE_SIZE."""
+    out=output_size(settings)
     size=RENDER_SIZES.get(settings.get('render_res',''))
-    if settings.get('upscaler','fsr3') in ('off','taa'):
-        return (size or FILTER_NATIVE_SIZE) if filter_on(settings) else None
-    return size or (FILTER_NATIVE_SIZE if filter_on(settings) else None)
+    if size and size[0]<=out[0] and size[1]<=out[1] and size!=out:
+        # A scene of exactly 1920x1080 is indistinguishable from the game's UI coordinate space,
+        # which the port's UI composition recognizes by that size.
+        return (1916,1078) if size==OUTPUT_SIZE else size
+    if out==OUTPUT_SIZE and filter_on(settings):
+        return FILTER_NATIVE_SIZE
+    return None
 
 
 def scaled_sizes(settings):
-    """(render, output) for an output other than 1080p (above it, or 720p for the Steam Deck):
-    the game renders at output / preset scale (or at the output size without upscaler) and the
-    upscaler fills the output. At 1080p the menu's render_res size, else None; None for TAA
-    (native, live host targets only)."""
+    """(render, output): the menu's scene size, at any output; with any upscaler (off is bilinear
+    stretch, as the menu shows it). At native: None at 1080p, else the output size itself (the
+    game patched to it). None for TAA at native (live host targets only)."""
     out=output_size(settings)
-    if menu_render_size(settings): return menu_render_size(settings),out
+    size=menu_render_size(settings)
+    if size: return size,out
     if out==OUTPUT_SIZE or settings.get('upscaler')=='taa': return None
-    scale=1.0
-    if settings.get('upscaler','fsr3')!='off':
-        preset=int(settings.get('preset','0') or 0)
-        scale=PRESET_SCALES[max(0,min(preset,len(PRESET_SCALES)-1))]
-    render=tuple(max(2,round(v/scale/2)*2) for v in out)
-    # A scene of exactly 1920x1080 (4K Performance) is indistinguishable from the game's UI
-    # coordinate space, which the port's UI composition recognizes by that size.
-    if render==OUTPUT_SIZE: render=(1916,1078)
-    return render,out
+    return out,out
 
 
 def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE):

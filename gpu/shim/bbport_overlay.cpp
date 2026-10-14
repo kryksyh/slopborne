@@ -313,9 +313,7 @@ void Because(const char* reason) {
 
 // The scene is rendered smaller than the output: an upscaler fills the screen.
 bool SceneReduced() {
-    const auto& s = BbSettings::Get();
-    return s.output_res == BbSettings::OutputDefault ? s.render_res != BbSettings::RenderNative
-                                                     : s.preset != BbSettings::NativeAA;
+    return BbSettings::Get().render_res != BbSettings::RenderNative;
 }
 
 bool TemporalUpscaler(int upscaler) {
@@ -347,6 +345,10 @@ void DisplayMenu() {
         for (int i = 0; i < BbSettings::OutputCount; ++i) {
             if (ImGui::Selectable(outputs[i], i == output)) {
                 Store(s.output_res, i, true);
+                // The scene size is kept while it is still smaller than the new output.
+                if (!BbSettings::RenderFits(s.render_res, i)) {
+                    BbSettings::SelectRenderRes(BbSettings::RenderNative);
+                }
             }
         }
         ImGui::EndCombo();
@@ -374,39 +376,34 @@ void DisplayMenu() {
     }
 
     ImGui::SeparatorText(T("Render resolution"));
-    if (s.output_res == BbSettings::OutputDefault) {
-        static const char* render_sizes[] = {T("1920 x 1080 (native)"), "1600 x 900", "1280 x 720",
-                                             "960 x 540", "640 x 360", "428 x 240"};
+    {
+        // Exact sizes at every output: the output's own size and each smaller one. 1920 x 1080
+        // is the game's own resolution (the PS4's), marked as the original.
+        const auto label_of = [](int width, int height) {
+            std::string label = std::to_string(width) + " x " + std::to_string(height);
+            if (width == 1920 && height == 1080) label += std::string(" ") + T("(original)");
+            return label;
+        };
+        const std::string native_label =
+            label_of(BbSettings::OutputWidths[s.output_res], BbSettings::OutputHeights[s.output_res]);
+        const auto size_label = [&](int r) {
+            return label_of(BbSettings::RenderWidths[r], BbSettings::RenderHeights[r]);
+        };
         const int render_res = s.render_res;
-        if (ImGui::BeginCombo(T("Scene size"), render_sizes[render_res])) {
+        const std::string current =
+            render_res == BbSettings::RenderNative ? native_label : size_label(render_res);
+        if (ImGui::BeginCombo(T("Scene size"), current.c_str())) {
+            if (ImGui::Selectable(native_label.c_str(), render_res == BbSettings::RenderNative)) {
+                BbSettings::SelectRenderRes(BbSettings::RenderNative);
+                dirty = true;
+            }
             for (int i = 0; i < BbSettings::RenderResCount; ++i) {
-                if (ImGui::Selectable(render_sizes[i], i == render_res)) {
+                if (!BbSettings::RenderFits(i, s.output_res)) {
+                    continue;
+                }
+                if (ImGui::Selectable(size_label(i).c_str(), i == render_res)) {
                     BbSettings::SelectRenderRes(i);
                     dirty = true;
-                }
-            }
-            ImGui::EndCombo();
-        }
-    } else {
-        int preset = s.preset;
-        char preset_label[64];
-        const auto size_of = [&](int p) {
-            const float scale = BbSettings::PresetScale(p);
-            return std::array<int, 2>{
-                int(std::lround(BbSettings::OutputWidths[s.output_res] / scale / 2) * 2),
-                int(std::lround(BbSettings::OutputHeights[s.output_res] / scale / 2) * 2)};
-        };
-        const auto current = size_of(preset);
-        std::snprintf(preset_label, sizeof(preset_label), "%s (%d x %d)",
-                      BbSettings::PresetName(preset), current[0], current[1]);
-        if (ImGui::BeginCombo(T("Scene size"), preset_label)) {
-            for (int i = 0; i < BbSettings::PresetCount; ++i) {
-                const auto size = size_of(i);
-                char label[64];
-                std::snprintf(label, sizeof(label), "%s (%d x %d)", BbSettings::PresetName(i),
-                              size[0], size[1]);
-                if (ImGui::Selectable(label, i == preset)) {
-                    Store(s.preset, i, true);
                 }
             }
             ImGui::EndCombo();
