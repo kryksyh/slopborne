@@ -14,7 +14,7 @@ probe=${BB_PROBE:-out/macos/gpu-performance/bb-probe}
 caps=${BB_GPU_CAPABILITIES:-$(dirname -- "$probe")/bb-gpu-capabilities}
 controller=${BB_CONTROLLER_INFO:-$(dirname -- "$probe")/bb-controller-info}
 renderer=${BB_RENDER_BIN:-}
-settings=${BB_DEFAULT_INI:-packaging/macos/app/bbport.ini}
+settings=${BB_DEFAULT_INI:-packaging/macos/app/defaults.ini}
 [[ -x $probe ]] || { echo "No $probe: run bash build.sh --performance (or set BB_PROBE)" >&2; exit 1; }
 [[ -x $controller ]] || { echo "No $controller: rebuild the controller helper" >&2; exit 1; }
 if [[ ! -x $caps && -z ${BB_GPU_CAPABILITIES:-} ]]; then
@@ -100,5 +100,25 @@ folder=$stage/Bloodborne-macOS
 mkdir -p "$folder"
 ditto "$app" "$folder/Bloodborne.app"
 cp packaging/macos/README-macOS.txt "$folder/"
-(cd "$stage" && ditto -c -k --keepParent Bloodborne-macOS "Bloodborne-macOS-$version.zip")
+# Licenses: the port's, the retro filter shaders', and those of the bundled and compiled-in code.
+licenses=$folder/licenses
+mkdir -p "$licenses"
+cp LICENSE "$licenses/bbport-LICENSE.txt"
+cp packaging/macos/licenses/THIRD-PARTY.txt "$licenses/"
+cp gpu/shadps4/video_core/host_shaders/libretro/ATTRIBUTION.md "$licenses/retro-filters-ATTRIBUTION.md"
+for file in fonts/LICENSE-DejaVu.txt fsr-vulkan/LICENSE.txt half/LICENSE.txt httplib/LICENSE \
+            imgui/LICENSE.txt magic_enum/LICENSE miniz/LICENSE sirit/LICENSE.txt wepoll/LICENSE; do
+    cp "gpu/third_party/$file" "$licenses/${file%%/*}-LICENSE.txt"
+done
+cp third_party/LibAtrac9/LICENSE "$licenses/LibAtrac9-LICENSE.txt"
+cp packaging/windows/licenses/nlohmann-json-LICENSE.txt "$licenses/"
+if [[ -f out/macos/prefix/share/licenses/SDL3/LICENSE.txt ]]; then
+    cp out/macos/prefix/share/licenses/SDL3/LICENSE.txt "$licenses/SDL3-LICENSE.txt"
+fi
+for package in molten-vk fmt zydis robin-map; do
+    license=${BB_MACOS_INTEL_PREFIX:-/usr/local}/opt/$package/LICENSE
+    if [[ -f $license ]]; then cp "$license" "$licenses/$package-LICENSE.txt"; fi
+done
+# No resource forks or extended attributes: they show up as ._ files in the zip.
+(cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Bloodborne-macOS "Bloodborne-macOS-$version.zip")
 echo "Package: $stage/Bloodborne-macOS-$version.zip"

@@ -1,0 +1,23 @@
+Third-party components in Bloodborne.app (macOS)
+
+Bundled libraries (Bloodborne.app/Contents/Frameworks):
+- MoltenVK (Khronos Group), Apache-2.0: https://github.com/KhronosGroup/MoltenVK
+- SDL3, zlib license: https://github.com/libsdl-org/SDL
+- FFmpeg (libavcodec, libavformat, libavutil, libswresample, libswscale), LGPL-2.1-or-later:
+  https://ffmpeg.org (source: https://ffmpeg.org/download.html)
+- OpenSSL (libssl, libcrypto), Apache-2.0: https://www.openssl.org
+- miniupnpc, BSD-3-Clause: https://miniupnp.tuxfamily.org
+- xxHash, BSD-2-Clause: https://github.com/Cyan4973/xxHash
+- epoll-shim, MIT: https://github.com/jiixyj/epoll-shim
+- fmt, MIT: https://github.com/fmtlib/fmt
+- Zydis and Zycore, MIT: https://github.com/zyantific/zydis
+
+Compiled in: shadPS4 (GPL-2.0-or-later), sirit, Dear ImGui, magic_enum, miniz, half, xbyak,
+cpp-httplib, wepoll, nlohmann/json, robin-map, Vulkan Memory Allocator, LibAtrac9, FSR-Vulkan and
+the AMD FidelityFX SDK (FSR 1 and FSR 3.1), DejaVu fonts. Their license texts are in this folder
+where the source tree carries one.
+
+Picture filters: shaders from libretro/glsl-shaders, converted to compute shaders; authors and
+licenses per shader in retro-filters-ATTRIBUTION.md.
+
+Apple MetalFX is part of macOS and is not redistributed.

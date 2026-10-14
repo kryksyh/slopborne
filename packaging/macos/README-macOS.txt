@@ -1,5 +1,7 @@
-Bloodborne for Mac
-==================
+Slopborne: Bloodborne for Mac
+=============================
+
+https://github.com/kryksyh/slopborne
 
 The original PlayStation 4 game running on your Mac: its x86-64 code runs through Rosetta and
 the graphics go to Metal. No game files are included: you need your own decrypted dump of

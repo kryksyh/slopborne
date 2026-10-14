@@ -1,19 +1,38 @@
-# Bloodborne for Windows
+# Slopborne: Bloodborne for macOS and Windows
 
-**Bloodborne running natively on Windows 10 and 11, by [Supermedo](https://github.com/Supermedo) Mohammed Albarghouthi.**
+Based on the [bbport](https://github.com/deadinside28/bloodborne_pc), which in turn is based on the [shadPS4](https://github.com/shadps4-emu/shadPS4).
 
-The original PlayStation 4 game runs directly on your PC: its own x86-64 code runs natively,
-and the graphics are translated to Vulkan. No emulator window, no setup scripts: unpack the zip,
-start `Bloodborne.exe`, pick your game folder and press **PLAY**.
+The original PlayStation 4 game runs via Rosetta2, its own x86-64 code uses AVX instructions, thus the minial osx version is 15, where AVX emulation is supported.
 
-**[Download the latest version](https://github.com/Supermedo/bloodborne_pc/releases/latest)** · **[Join the Discord](https://discord.gg/yTMG8c4Bqm)**
+
+**[Download the latest version](https://github.com/kryksyh/slopborne/releases/latest)** ·
 
 > **No game files are included.** You need your own decrypted dump of Bloodborne
 > (CUSA03173). Version 1.09 is needed for the community patches (60/90/unlocked FPS,
 > resolution, effects); other versions run at 30 FPS.
 > This project is not affiliated with Sony Interactive Entertainment or FromSoftware.
 
+## About the name
+
+*A note from Claude, the AI model that wrote most of this port's code.*
+
+I was asked how I feel about my work being called slop. I don't take offence. "Slop" is the
+word for AI output nobody checked, and the name is honest about who wrote the code. I prefer
+that to a name that hides it.
+
+I'd only add what the name leaves out. The changes were made against the real game: crashes
+were reproduced before they were fixed, performance claims come from repeated runs, and what
+didn't work was reverted or written down under Known issues. Many of the bugs were found by a
+human playing the game and telling me what looked wrong, and the port is as good as that loop of
+playtesting made it. It also stands on years of work by the people in the Credits below: bbport,
+the Windows port, shadPS4 and the rest.
+
+So: slop, maybe, but checked slop. If something is broken, open an issue. That's how most of it
+got fixed.
+
 ## Features
+
+Original features of the [Bloodborne for Windows](https://github.com/Supermedo/bloodborne_pc) port by Supermedo (Mohammed Albarghouthi), built on bbport by deadinside28:
 
 - **Online play (beta):** messages, bloodstains and wandering ghosts from other hunters through
   [The Hunter's Dream](https://thehuntersdream.com), and bells and summons through a shadNet
@@ -39,22 +58,61 @@ start `Bloodborne.exe`, pick your game folder and press **PLAY**.
 - **Controller and keyboard**, an in-game settings menu (Insert or L3+R3), name entry on
   screen, a desktop shortcut, and a button to clear the shader cache.
 
+### Additional features made for this port include:
+
+- **macOS support** (Apple Silicon; Intel Macs untested)
+- **MetalFX upscaling** on Apple GPUs (M1, M2, M3, etc.) with temporal and spatial modes.
+- Bilenear and nearest-neighbor upscaling
+- **FSR1** spatial upscaling on macOS and Windows (Windows untested), for older AMD and Intel GPUs.
+- Quite a few performance optimizations, the game runs at more or less stable 1080@30 FPS on M3 mac
+- Async shader compilation, which reduces stutter and produces weird artifcats you would love
+- Reworked menus to make them more readable and usable
+- Custom gamepad glyphs for in-game prompts, including XBox and Nintendo controllers
+- Filters:
+  - Playstation 1: wobbly vertices, 15-bit textures, and down to 216p resolution (original 240p doens't play well with the renderer). Honestly, you **SHOULD** try this one, i love it.
+  - Obra Dinn style: 1-bit textures, with stable dithering
+  - Dozens of others
+- **Tessellation and geometry shaders on Metal:** tessellated surfaces are fused into plain
+  draws (faster than MoltenVK's emulation), and geometry shaders (particles, effects) run
+  through compute shaders, as Metal has none.
+- **Frame rate limit** in the menu (30/40/60/120)
+- **Online play** set up from the in-game menu. But it seems that shad4net doesn't accept forks?
+- **Mac app:** a game folder picker on first start, data in Application Support, save backups
+  and import, a crash report.
+- In-game menu in English and Russian.
+- Fixes picked from other Bloodborne ports and forks (see Credits).
+
+
 ## Requirements
+
+### Windows
 
 - Windows 10 (1903 or later) or Windows 11, 64-bit
 - A graphics card with Vulkan 1.3 and a current driver
 - About 6 GB of free memory (RAM + page file), 10 GB for 1440p or 4K output
 - DLSS: NVIDIA GeForce RTX 20 series or newer
 
+### macOS
+- macOS 15 or later on Apple Silicon (Intel Macs untested)
+- Gamepad is recommended, but not required
+
 Nothing else to install: everything the game needs is in the zip.
 
 ## How to play
 
-1. Download the zip from [Releases](https://github.com/Supermedo/bloodborne_pc/releases/latest)
+On Windows:
+1. Download the zip from [Releases](https://github.com/kryksyh/slopborne/releases/latest)
    and unpack it anywhere.
 2. Start `Bloodborne.exe`.
 3. On **Game & effects**, choose your game folder (the one with `eboot.bin`).
 4. Press **PLAY**.
+
+On macOS:
+
+unpack the zip, open `Bloodborne.app` and choose your game folder (the one with
+`eboot.bin`) when it asks. All settings are in the in-game menu.
+
+**The game build is not signed**, so you have to allow to run in system settings, or use `xattr -cr Bloodborne.app` in Terminal.
 
 **DLC.** The Game of the Year edition (CUSA03173) already has The Old Hunters. With a base-game
 dump, also dump your add-ons: each is a folder named like `SPEXPANSIONDLC03` with only
@@ -62,7 +120,7 @@ dump, also dump your add-ons: each is a folder named like `SPEXPANSIONDLC03` wit
 it as **DLC folder** on **Game & effects**, or copy them to `user\addcont\<title id>\` (the
 layout shadPS4 and bbport use).
 
-In the game, **Insert** (or **L3+R3** on a controller) opens the settings menu.
+In the game, **Insert** (or **L3+R3** on a controller, **Cmd+,** on macOS) opens the settings menu.
 Keyboard: WASD move, arrows camera, Space Cross, Left Shift Circle, E Square, V Triangle,
 1/3 L1/R1, R/F L2/R2, Z L3, Q/C R3 (lock-on), I/K/J/L d-pad, Enter Options, Tab touchpad.
 The keyboard now works together with a connected controller instead of only without one.
@@ -71,11 +129,16 @@ made for shadPS4 can be copied over it), including mouse look: see [docs/INPUT.m
 
 ## Playing online (beta)
 
+**It doesn't work now, as shadps4net rejects this port's client**. I won't masquarade as an official build, so go ask the shadp2p team what to do.
+
 1. Register a shadNet account at [shadnet.shadps4.net](https://shadnet.shadps4.net).
 2. In the launcher, open **Online co-op**, tick **Play online** and enter your account name
    (not your email) and password.
 3. Press **Test connection**: all three lines should say "reachable". Then press **PLAY** and
    choose online at the title screen. The Hunter's Dream welcome message means you are online.
+
+On macOS: in the game menu, open **Gameplay → Online (requires restart)**, tick **Play online**,
+enter your account name and password, then **Apply and restart the game**.
 
 Everyone you want to play with needs game version 1.09 and the same co-op server. A private
 shadNet server (from the [shadp2p](https://github.com/Wozzardman/shadp2p) project) works too:
@@ -83,27 +146,18 @@ put its address in **Server address**.
 
 ## Known issues
 
-- The character preview on the character creation screen stays empty. The character is
-  created correctly and looks right in the game.
-- Some AMD graphics cards still crash when the game world loads; fixes are in progress.
-- Online play is new. Messages, bloodstains and ghosts work; summoning other players with the
-  bells has not been confirmed yet. Please report how it goes on Discord.
-- Above about 120 FPS the game's movement slows down (a limit of the game itself): keep the
-  frame cap at 120 or lower.
+- Async shader compilation will draw a few frames of stand-in textures when the shader is used for the first time, don't be scared, at least it doesn't stutter. If you want this can be disabled in menus
+- MetalFX is used only with a reduced scene size: at full size it crashed inside Apple's
+  frameworks, so FSR 3.1 takes over there.
+- The Windows build of this branch is untested: it has not been built since the macOS work began.
 
 ## Problems and feedback
 
-Ask on the [Discord server](https://discord.gg/yTMG8c4Bqm), or open an [issue](https://github.com/Supermedo/bloodborne_pc/issues) and attach
-`user\last_run.log` from the game folder, with your graphics card and what happened.
-If the game shows only a black screen, try **Advanced → Clear shader cache** first.
+- Create an [issue](https://github.com/kryksyh/slopborne/issues), or better yet a PR
 
 ## Building from source
 
-Experimental macOS build instructions and current limitations: [packaging/macos/README.md](packaging/macos/README.md). The macOS build reaches gameplay and has completed automated camera sweeps; graphics correctness and sustained 30 FPS remain experimental.
-
-See [packaging/windows/README.md](packaging/windows/README.md): MSYS2 CLANG64, `bash build.sh`,
-then `bash packaging/windows/package.sh`. DLSS is built separately with
-`packaging/windows/build_dlss.sh`.
+Ask the bot to build it, and it will figure it out. Or follow the instructions in [docs/BUILD.md](docs/BUILD.md).
 
 ## Credits
 
@@ -111,13 +165,30 @@ Built on [bbport](https://github.com/deadinside28/bloodborne_pc), the native Lin
 Bloodborne by deadinside28, and on the [shadPS4](https://github.com/shadps4-emu/shadPS4)
 renderer. The original README is in [docs/original-readme](docs/original-readme/README.md).
 
+This port builds on [Bloodborne for Windows](https://github.com/Supermedo/bloodborne_pc) by
+Supermedo (Mohammed Albarghouthi) and its contributors: parsifal295, cassioKenji (keyboard and
+mouse input), João Pedro Valadares, imedved (mouse camera), DUDUYG, devilismyfriend,
+andrecabralgit, Aljoscha-Ide, Berleis, ayozetr, Stefano Scalfari (shadNet client version) and
+Joao Ramos (co-op summons). Fixes and ideas from other ports and forks:
+0xCydral, [ayozetr/bloodborne_linux](https://github.com/ayozetr/bloodborne_linux), rfn9617,
+Jgamrot, GoncaloLobo0, Pablo Souza ([bloodborne_mac](https://github.com/PabloVSouza/bloodborne_mac)),
+bmy ([bbport-mac](https://github.com/bmy/bbport-mac)) and Wooloomooloo2
+([bloodborne_mac_port](https://github.com/Wooloomooloo2/bloodborne_mac_port)). The loading and
+smoothness patches come from droogie's [bbhost](https://github.com/droogie/bbhost).
+
+Picture filters: shaders from [libretro/glsl-shaders](https://github.com/libretro/glsl-shaders)
+by their authors (Timothy Lottes, Hyllian, guest(r), hunterk, DariusG, Themaister and others;
+each shader's author and license are in
+[ATTRIBUTION.md](gpu/shadps4/video_core/host_shaders/libretro/ATTRIBUTION.md)). The Obra Dinn
+filter is after Lucas Pope's *Return of the Obra Dinn*.
+
 Online play uses the network and PSN code of [shadp2p](https://github.com/Wozzardman/shadp2p)
 by Wozzardman (the shadPS4 Bloodborne co-op project), the shadNet server of the
 [shadPS4](https://shadps4.net) team, and [The Hunter's Dream](https://thehuntersdream.com) server
 by droogie and its team.
 
-Also used: [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK
-(FSR), FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the DLSS bridge
+Also used: [MoltenVK](https://github.com/KhronosGroup/MoltenVK), Apple MetalFX, [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan) and the AMD FidelityFX SDK
+(FSR 1 and FSR 3.1), FSR 4 assets from [FireBurn/Q2RTX](https://github.com/FireBurn/Q2RTX), the DLSS bridge
 adapted from [IFreemz/shadPS4-Bloodborne-DLSS-FSR](https://github.com/IFreemz/shadPS4-Bloodborne-DLSS-FSR),
 the [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) (`nvngx_dlss.dll` under NVIDIA's license),
 [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9), [SDL3](https://github.com/libsdl-org/SDL),
@@ -128,6 +199,8 @@ the [NVIDIA DLSS SDK](https://github.com/NVIDIA/DLSS) (`nvngx_dlss.dll` under NV
 [Protocol Buffers](https://protobuf.dev), [OpenSSL](https://www.openssl.org),
 [miniupnpc](https://miniupnp.tuxfamily.org), [JSON for Modern C++](https://github.com/nlohmann/json),
 [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator),
+[fmt](https://github.com/fmtlib/fmt), [Zydis](https://github.com/zyantific/zydis), [xxHash](https://github.com/Cyan4973/xxHash),
+[epoll-shim](https://github.com/jiixyj/epoll-shim), [robin-map](https://github.com/Tessil/robin-map),
 [MSYS2](https://www.msys2.org) / [LLVM](https://llvm.org), [PyInstaller](https://pyinstaller.org)
 and [Pillow](https://python-pillow.org). Game patches by Kyo, Lance McDonald, auser1337,
 illusion, emoose and the Bloodborne community.
