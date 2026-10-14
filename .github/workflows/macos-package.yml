@@ -1,0 +1,101 @@
+# Builds the macOS download on an Apple Silicon runner, the steps of docs/BUILD.md: x86-64 libraries
+# from bootstrap.py (Rosetta for the x86-64 tools), build.sh --bootstrap --performance, package.sh.
+name: macos-package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Tests
+        run: cd tests && python3 -m unittest discover -p 'test_*.py'
+
+      - name: Rosetta and build tools
+        run: |
+          arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
+          brew install cmake ninja pkgconf boost vulkan-headers glslang spirv-tools robin-map nlohmann-json
+
+      # SDL, FFmpeg, OpenSSL, fmt, Zydis and the rest for x86-64, plus MoltenVK (the slow part).
+      - uses: actions/cache@v4
+        with:
+          path: out/macos/prefix
+          key: macos-prefix-${{ hashFiles('packaging/macos/bootstrap.py') }}
+
+      - name: Build
+        run: |
+          [ -f out/macos/prefix/lib/libSDL3.dylib ] || bootstrap=--bootstrap
+          BB_JOBS=$(sysctl -n hw.ncpu) bash packaging/macos/build.sh ${bootstrap:-} --performance
+
+      # Developer ID signature and notarization when the secrets are there (not for pull requests from
+      # forks): otherwise package.sh signs ad hoc.
+      - name: Signing keychain
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12_B64 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT" ]; then echo "No signing certificate: ad-hoc signature"; exit 0; fi
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(uuidgen)
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+          if [ -z "$identity" ]; then echo "No Developer ID Application identity in the certificate"; exit 1; fi
+          echo "Signing as $identity"
+          echo "BB_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
+      - name: Package
+        run: BB_VERSION=$(git describe --tags --always) bash packaging/macos/package.sh
+
+      - name: Notarize
+        if: env.BB_SIGN_IDENTITY != ''
+        env:
+          KEY: ${{ secrets.MACOS_NOTARY_KEY_B64 }}
+          KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          ISSUER: ${{ secrets.MACOS_ISSUER_ID }}
+        run: |
+          echo "$KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER")
+          zip=$(ls out/macos/package-*/Bloodborne-macOS-*.zip)
+          result=$(xcrun notarytool submit "$zip" "${auth[@]}" --wait --timeout 60m --output-format json)
+          echo "$result"
+          id=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
+          status=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')
+          if [ "$status" != Accepted ]; then xcrun notarytool log "$id" "${auth[@]}"; exit 1; fi
+          # The ticket goes into the app, then the zip is made again from the stapled app.
+          stage=$(dirname "$zip")
+          xcrun stapler staple "$stage/Bloodborne-macOS/Bloodborne.app"
+          mkdir -p dist
+          (cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Bloodborne-macOS "$GITHUB_WORKSPACE/dist/$(basename "$zip")")
+          spctl --assess --type execute --verbose "$stage/Bloodborne-macOS/Bloodborne.app"
+
+      - name: Checksums
+        run: |
+          mkdir -p dist
+          [ -n "$(ls dist/*.zip 2>/dev/null)" ] || cp out/macos/package-*/*.zip dist/
+          cd dist && shasum -a 256 *.zip | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slopborne-macos
+          path: dist/
+          compression-level: 0

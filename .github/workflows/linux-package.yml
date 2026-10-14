@@ -1,0 +1,45 @@
+# Builds the Linux AppImage (Steam Deck and desktops) on an Ubuntu runner, the steps of
+# docs/original-readme: build.sh in shell.nix, then packaging/appimage.sh (nix-appimage).
+name: linux-package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: experimental-features = nix-command flakes
+
+      - name: Tests
+        run: cd tests && python3 -m unittest discover -p 'test_*.py'
+
+      - name: Build
+        run: nix-shell shell.nix --run 'BB_IN_NIX_SHELL=1 bash build.sh'
+
+      - name: AppImage
+        run: |
+          bash tools/fetch_fsr4_assets.sh
+          bash packaging/appimage.sh
+          cd dist && sha256sum *.AppImage | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slopborne-linux
+          path: dist/
+          compression-level: 0

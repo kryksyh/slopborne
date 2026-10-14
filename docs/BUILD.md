@@ -3,14 +3,13 @@
 ## macOS
 
 Apple Silicon, macOS 15 or newer, Xcode command line tools and Rosetta. The game and its
-libraries are built for x86-64 (the game's own code runs under Rosetta), so the linked
-libraries come from an Intel Homebrew in `/usr/local`.
+libraries are built for x86-64 (the game's own code runs under Rosetta): `--bootstrap` builds
+the linked libraries for x86-64 into `out/macos/prefix` and fetches MoltenVK's universal build.
 
 ```sh
-brew install cmake ninja pkgconf python@3.13 boost vulkan-headers glslang spirv-tools
-arch -x86_64 /usr/local/bin/brew install molten-vk fmt robin-map zydis nlohmann-json
+brew install cmake ninja pkgconf python@3.13 boost vulkan-headers glslang spirv-tools robin-map nlohmann-json
 git submodule update --init --recursive
-bash packaging/macos/build.sh --bootstrap --performance   # SDL, FFmpeg, OpenSSL, ... into out/macos/prefix, then the game
+bash packaging/macos/build.sh --bootstrap --performance   # SDL, FFmpeg, OpenSSL, fmt, Zydis, ... then the game
 bash packaging/macos/package.sh                          # out/macos/package-*/Bloodborne-macOS-*.zip
 ```
 

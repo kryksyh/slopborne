@@ -48,9 +48,15 @@ for module in argparse base64 collections hashlib json math re shutil struct tem
               urllib.request zipfile ctypes shlex time; do
     hidden+=(--hidden-import "$module")
 done
+# BB_SIGN_IDENTITY: a Developer ID Application identity in the keychain (CI, for notarization):
+# the hardened runtime with packaging/macos/entitlements.plist. Without it, an ad-hoc signature.
+identity=${BB_SIGN_IDENTITY:-}
+entitlements=$PWD/packaging/macos/entitlements.plist
+signing=()
+[[ -n $identity ]] && signing=(--codesign-identity "$identity" --osx-entitlements-file "$entitlements")
 out/macos/pyenv/bin/python -m PyInstaller --noconfirm --log-level WARN --windowed --argv-emulation \
     --name Bloodborne --icon "$stage/Bloodborne.icns" --osx-bundle-identifier io.github.bbport.bloodborne \
-    --distpath "$stage/dist" --workpath "$stage/work" --specpath "$stage/work" \
+    --distpath "$stage/dist" --workpath "$stage/work" --specpath "$stage/work" "${signing[@]}" \
     --paths "$PWD/scripts" "${hidden[@]}" "$PWD/packaging/macos/app/bloodborne_mac.py"
 app=$stage/Bloodborne.app
 mv "$stage/dist/Bloodborne.app" "$app"
@@ -97,8 +103,16 @@ set_plist NSHighResolutionCapable bool true
 # the game's window (bb-probe, a regular app through SDL) is the app's one Dock icon.
 set_plist LSUIElement bool true
 
-# Ad-hoc signature (no Developer ID): Gatekeeper asks once (see README-macOS.txt).
-codesign --force --deep --sign - "$app"
+if [[ -n $identity ]]; then
+    # Inside out: the game's libraries and executables (PyInstaller signed its own), then the bundle.
+    sign=(codesign --force --timestamp --options runtime --entitlements "$entitlements" --sign "$identity")
+    find "$contents/Frameworks/game" -type f -name '*.dylib' -exec "${sign[@]}" {} +
+    for exe in "${executables[@]}"; do "${sign[@]}" "$contents/MacOS/$exe"; done
+    "${sign[@]}" "$app"
+else
+    # Ad-hoc signature: Gatekeeper asks once (see README-macOS.txt).
+    codesign --force --deep --sign - "$app"
+fi
 codesign --verify --deep --strict "$app"
 
 folder=$stage/Bloodborne-macOS
@@ -123,6 +137,12 @@ fi
 for package in molten-vk fmt zydis robin-map; do
     license=${BB_MACOS_INTEL_PREFIX:-/usr/local}/opt/$package/LICENSE
     if [[ -f $license ]]; then cp "$license" "$licenses/$package-LICENSE.txt"; fi
+done
+# The libraries bootstrap.py built or fetched (CI has no Intel Homebrew).
+for license in out/macos/prefix/share/licenses/*/LICENSE*; do
+    [[ -f $license ]] || continue
+    name=$(basename "$(dirname "$license")")
+    [[ -f $licenses/$name-LICENSE.txt ]] || cp "$license" "$licenses/$name-LICENSE.txt"
 done
 # No resource forks or extended attributes: they show up as ._ files in the zip.
 (cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Bloodborne-macOS "Bloodborne-macOS-$version.zip")

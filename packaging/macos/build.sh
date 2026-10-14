@@ -44,6 +44,8 @@ fi
 # Host tools and header-only packages may be ARM64. All linked libraries must be Intel.
 host_prefix=${BB_MACOS_HOST_PREFIX:-$(brew --prefix)}
 intel_prefix=${BB_MACOS_INTEL_PREFIX:-/usr/local}
+# bootstrap.py provides MoltenVK when there is no Intel Homebrew.
+[[ -z ${BB_MACOS_INTEL_PREFIX:-} && -f $prefix/lib/libMoltenVK.dylib ]] && intel_prefix=$prefix
 for lib in "$prefix/lib/libSDL3.dylib" "$prefix/lib/libavcodec.dylib" \
            "$prefix/lib/libcrypto.dylib" "$intel_prefix/lib/libMoltenVK.dylib"; do
     [[ -f $lib ]] || { echo "Missing $lib; see packaging/macos/README.md (or use --bootstrap)." >&2; exit 1; }

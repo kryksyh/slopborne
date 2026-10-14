@@ -17,7 +17,14 @@ SOURCES = [
     ('openssl', 'openssl-3.5.0', 'https://github.com/openssl/openssl/releases/download/openssl-3.5.0/openssl-3.5.0.tar.gz', '344d0a79f1a9b08029b0744e2cc401a43f9c90acd1044d09a530b4885a8e9fc0'),
     ('epoll-shim', 'epoll-shim-0.0.20240608', 'https://github.com/jiixyj/epoll-shim/archive/refs/tags/v0.0.20240608.tar.gz', '8f5125217e4a0eeb96ab01f9dfd56c38f85ac3e8f26ef2578e538e72e87862cb'),
     ('miniupnpc', 'miniupnpc-2.3.3', 'https://miniupnp.tuxfamily.org/files/miniupnpc-2.3.3.tar.gz', 'd52a0afa614ad6c088cc9ddff1ae7d29c8c595ac5fdd321170a05f41e634bd1a'),
+    ('fmt', 'fmt-12.2.0', 'https://github.com/fmtlib/fmt/archive/refs/tags/12.2.0.tar.gz', '8b852bb5aa6e7d8564f9e81394055395dd1d1936d38dfd3a17792a02bebd7af0'),
+    ('zycore', 'zycore-c-1.5.2', 'https://github.com/zyantific/zycore-c/archive/refs/tags/v1.5.2.tar.gz', '943f91eb9ab2a8cc01ab9f8b785e769a273502071e0ee8011cdfcaad93947cec'),
+    ('zydis', 'zydis-4.1.1', 'https://github.com/zyantific/zydis/archive/refs/tags/v4.1.1.tar.gz', '45c6d4d499a1cc80780f7834747c637509777c01dca1e98c5e7c0bfaccdb1514'),
 ]
+# Homebrew no longer installs an Intel copy on Apple Silicon: MoltenVK's own universal build.
+MOLTENVK = ('https://github.com/KhronosGroup/MoltenVK/releases/download/v1.4.2/MoltenVK-macos.tar',
+            'f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e',
+            'MoltenVK/MoltenVK/dynamic/dylib/macOS/libMoltenVK.dylib')
 
 
 def download(url, path, digest):
@@ -81,6 +88,12 @@ def main():
                         'protobuf': ('', ['-Dprotobuf_BUILD_TESTS=OFF', '-Dprotobuf_WITH_ZLIB=OFF']),
                         'epoll-shim': ('', ['-DBUILD_TESTING=OFF']),
                         'miniupnpc': ('', ['-DUPNPC_BUILD_TESTS=OFF', '-DUPNPC_BUILD_SAMPLE=OFF']),
+                        'fmt': ('', ['-DFMT_TEST=OFF', '-DFMT_DOC=OFF']),
+                        'zycore': ('', []),
+                        # Zydis links Zycore by its plain name, which carries no include path.
+                        'zydis': ('', ['-DZYAN_SYSTEM_ZYCORE=ON', '-DZYDIS_BUILD_TOOLS=OFF',
+                                       '-DZYDIS_BUILD_EXAMPLES=OFF', f'-DCMAKE_PREFIX_PATH={prefix}',
+                                       f'-DCMAKE_C_FLAGS=-I{prefix}/include']),
                     }[name]
                     build_name = {'SDL3': 'sdl', 'epoll-shim': 'epoll'}.get(name, name)
                     build = deps / f'{build_name}-build'
@@ -89,7 +102,13 @@ def main():
                          f'-DCMAKE_INSTALL_PREFIX={prefix}', *flags])
                     run(['cmake', '--build', build, '-j', args.jobs])
                     run(['cmake', '--install', build])
+                    if name in ('fmt', 'zycore', 'zydis'):
+                        licenses = prefix / 'share/licenses' / name
+                        licenses.mkdir(parents=True, exist_ok=True)
+                        for license in source.glob('LICENSE*'):
+                            (licenses / 'LICENSE').write_bytes(license.read_bytes())
             except subprocess.CalledProcessError as error:
+                print(''.join(log_path.read_text(errors='replace').splitlines(True)[-40:]), flush=True)
                 raise RuntimeError(f'{name} failed; see {log_path}') from error
         stamp.write_text(digest + '\n')
     if not args.runtime_only:
@@ -97,6 +116,16 @@ def main():
         header.parent.mkdir(parents=True, exist_ok=True)
         download('https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/v3.3.0/include/vk_mem_alloc.h',
                  header, '90ce12fc4a2466235a09ae02905dd0c13aee80c1bbf11b331ab61230c2ceb112')
+        url, digest, member = MOLTENVK
+        library = prefix / 'lib/libMoltenVK.dylib'
+        if not library.exists():
+            archive = deps / 'MoltenVK-macos.tar'
+            download(url, archive, digest)
+            with tarfile.open(archive) as package:
+                library.write_bytes(package.extractfile(member).read())
+                licenses = prefix / 'share/licenses/molten-vk'
+                licenses.mkdir(parents=True, exist_ok=True)
+                (licenses / 'LICENSE').write_bytes(package.extractfile('MoltenVK/LICENSE').read())
     print(f'Dependencies ready: {prefix}')
 
 

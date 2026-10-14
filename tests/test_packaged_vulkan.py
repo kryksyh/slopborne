@@ -3,6 +3,7 @@ from paths import ROOT
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -11,11 +12,12 @@ vulkan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(vulkan)
 
 
+@unittest.skipIf(sys.platform == 'win32', 'the Linux AppImage driver setup')
 class PackagedVulkanTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()  # macOS: /var is a symlink
         self.icds = self.root / "icds"
         self.libs = self.root / "host-libs"
         self.icds.mkdir()

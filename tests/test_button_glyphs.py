@@ -48,6 +48,9 @@ def fixture():
     return pack(raw)
 
 
+# Test folders go under out/ (kept for inspection), which a fresh checkout lacks.
+(ROOT / 'out').mkdir(exist_ok=True)
+
 class GlyphTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

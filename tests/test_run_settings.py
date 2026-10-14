@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 
+@unittest.skipIf(sys.platform == 'win32', 'run.sh is the Linux and macOS launcher')
 class RestartResolutionTests(unittest.TestCase):
     def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
         with tempfile.TemporaryDirectory() as directory:

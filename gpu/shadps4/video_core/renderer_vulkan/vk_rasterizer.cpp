@@ -1771,7 +1771,8 @@ bool Rasterizer::DeferDispatch(const ComputePipeline* pipeline) {
             if (info.range == VK_WHOLE_SIZE) {
                 return false;
             }
-            deferred.snapshot_infos[index] = {info.buffer, snapshot_size, info.range};
+            deferred.snapshot_infos[index] =
+                vk::DescriptorBufferInfo{info.buffer, snapshot_size, info.range};
             snapshot_size = Common::AlignUp(snapshot_size + info.range, SnapshotAlignment);
         }
     }
@@ -3123,7 +3124,7 @@ void Rasterizer::PatchNullResources(const Shader::Info& stage, u32 first_write) 
         } else if (!info.buffer) {
             const u64 zero = 0;
             const u64 offset = stream.Copy(&zero, sizeof(zero), instance.StorageMinAlignment());
-            info = {stream.Handle(), offset, sizeof(zero)};
+            info = vk::DescriptorBufferInfo{stream.Handle(), offset, sizeof(zero)};
         }
     }
     for (u32 i = 0; i < stage.images.size(); ++i) {
@@ -3154,7 +3155,7 @@ void Rasterizer::PatchNullResources(const Shader::Info& stage, u32 first_write) 
         return;
     }
     const auto offset = stream.Copy(present.data(), sizeof(present), instance.StorageMinAlignment());
-    *presence_info = {stream.Handle(), offset, sizeof(present)};
+    *presence_info = vk::DescriptorBufferInfo{stream.Handle(), offset, sizeof(present)};
 }
 
 Rasterizer::ImageDescCacheEntry& Rasterizer::CachedImageDescEntry(const AmdGpu::Image& sharp,

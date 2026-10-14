@@ -9,6 +9,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+if sys.platform == 'win32':
+    raise unittest.SkipTest('the macOS benchmark queue uses fcntl')
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / 'packaging/macos/benchmark-slot.py'
 SPEC = importlib.util.spec_from_file_location('benchmark_slot', WRAPPER)

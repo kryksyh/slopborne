@@ -163,7 +163,7 @@ void FrameCapture::OnFlip(VAddr presented_address) {
     static u64 last_sequence = 0;
     if (sequence_path && state.load(std::memory_order_relaxed) == Idle) {
         u64 sequence = 0;
-        if (std::ifstream(sequence_path) >> sequence; sequence > last_sequence) {
+        if (std::ifstream file(sequence_path); file >> sequence && sequence > last_sequence) {
             last_sequence = sequence;
             state.store(Armed, std::memory_order_release);
             std::printf("Frame capture: armed request %llu\n",

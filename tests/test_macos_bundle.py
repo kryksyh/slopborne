@@ -6,6 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+import sys
+
+if sys.platform != 'darwin':
+    raise unittest.SkipTest('macOS bundling uses otool and install_name_tool')
 
 spec = importlib.util.spec_from_file_location('macbundle', ROOT / 'packaging/macos/bundle_dylibs.py')
 bundle = importlib.util.module_from_spec(spec)
