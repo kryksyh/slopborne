@@ -83,7 +83,12 @@ jobs:
           if [ "$status" != Accepted ]; then xcrun notarytool log "$id" "${auth[@]}"; exit 1; fi
           # The ticket goes into the app, then the zip is made again from the stapled app.
           stage=$(dirname "$zip")
-          xcrun stapler staple "$stage/Slopborne-macOS/Slopborne.app"
+          # Apple hands out the ticket a little after accepting it: a few tries.
+          for try in 1 2 3 4 5; do
+            xcrun stapler staple "$stage/Slopborne-macOS/Slopborne.app" && break
+            [ $try = 5 ] && exit 1
+            sleep 30
+          done
           mkdir -p dist
           (cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Slopborne-macOS "$GITHUB_WORKSPACE/dist/$(basename "$zip")")
           spctl --assess --type execute --verbose "$stage/Slopborne-macOS/Slopborne.app"
