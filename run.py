@@ -246,18 +246,17 @@ def main():
                            '--enabled', env.get('BB_MODS_ENABLED', '1'), capture=True).strip())
     mod_view = game if game.resolve() != original_game else None
     try:
-        if sys.platform == 'darwin':
-            # The helper uses the same SDL identity/calibration as the overlay.
-            # Generate a retained view after user mods, without editing their files.
-            helper = probe.parent / 'bb-controller-info'
-            if helper.is_file():
-                try:
-                    game = Path(run_script('button_glyphs.py', game, '--out', out,
-                                           '--helper', helper, capture=True, optional=True).strip())
-                except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
-                    print(f'Controller glyphs: could not prepare replacements: {error}; using original icons')
-            else:
-                print('Controller glyphs: bb-controller-info is missing; using original icons')
+        # The helper uses the same SDL identity/calibration as the overlay.
+        # Generate a retained view after user mods, without editing their files.
+        helper = probe.parent / ('bb-controller-info' + EXE)
+        if helper.is_file():
+            try:
+                game = Path(run_script('button_glyphs.py', game, '--out', out,
+                                       '--helper', helper, capture=True, optional=True).strip())
+            except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
+                print(f'Controller glyphs: could not prepare replacements: {error}; using original icons')
+        else:
+            print('Controller glyphs: bb-controller-info is missing; using original icons')
         run_script('prepare.py', game, '--out', out)
         run_script('link_libc.py', game, '--out', out)
         run_script('link_modules.py', game, '--out', out)

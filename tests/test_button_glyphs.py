@@ -115,7 +115,7 @@ class GlyphTests(unittest.TestCase):
             (folder / 'eboot.bin').write_bytes(b'fixture')
         probe = root / 'bb-probe'
         probe.touch()
-        (root / 'bb-controller-info').touch()
+        (root / ('bb-controller-info' + launcher.EXE)).touch()
         for failed, expected in ((False, generated), (True, mods)):
             def script(name, *args, **kwargs):
                 if name == 'mods.py':
@@ -127,7 +127,9 @@ class GlyphTests(unittest.TestCase):
                         raise subprocess.CalledProcessError(1, ['glyphs'])
                     return str(generated)
                 return ''
-            env = dict(BB_DATA_DIR=str(root / 'data'), BB_PROBE=str(probe), BB_GAME_DIR=str(game))
+            # BB_FORCE_PATCHES: no eboot.elf check (the fixture has no game code).
+            env = dict(BB_DATA_DIR=str(root / 'data'), BB_PROBE=str(probe), BB_GAME_DIR=str(game),
+                       BB_FORCE_PATCHES='1')
             with self.subTest(failed=failed), patch.dict(os.environ, env, clear=True), \
                  patch.object(launcher.sys, 'platform', 'darwin'), \
                  patch.object(launcher.sys, 'argv', ['run.py']), \

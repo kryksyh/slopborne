@@ -43,11 +43,11 @@ cp -r out/pyi-dist/Bloodborne/. "$dest/"
 llvm-strip -o "$dest/Play Bloodborne.exe" out/bb-play.exe
 cp launcher/bloodborne.ico launcher/bloodborne.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
-for exe in bb-probe.exe bb-gpu-capabilities.exe; do
+for exe in bb-probe.exe bb-gpu-capabilities.exe bb-controller-info.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
 done
 # Every DLL the executables load from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...).
-ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" |
+ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" "$dest/bin/bb-controller-info.exe" |
     awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
         cp -u "$dll" "$dest/bin/"
     done

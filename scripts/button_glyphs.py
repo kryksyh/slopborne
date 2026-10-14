@@ -19,6 +19,8 @@ import sys
 import tempfile
 import zlib
 
+from mods import make_link
+
 VERSION = 1
 PS = ('Cross', 'Circle', 'Square', 'Triangle')
 NAMES = ('KG_Cancel', 'KG_OK', 'KG_R_L', 'KG_R_U')
@@ -195,12 +197,12 @@ def asset_view(game, target, out):
             link = destination / entry.name
             if entry.name == parts[0]:
                 if len(parts) == 1:
-                    link.symlink_to(target)
+                    make_link(link, target)
                 else:
                     link.mkdir()
                     level(entry, link, parts[1:])
             else:
-                link.symlink_to(entry, target_is_directory=entry.is_dir())
+                make_link(link, entry)
     level(game, view, ('dvdroot_ps4', 'menu', 'common.tpf.dcx'))
     return view
 
