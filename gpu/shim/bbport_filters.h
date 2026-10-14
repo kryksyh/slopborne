@@ -178,7 +178,8 @@ inline constexpr Filter All[] = {
      int(std::size(LinesParams)), OwnLines},
     {"ps1", "PlayStation", "Filters",
      "For better results, set the lowest render resolution (216p) and the lowest level of "
-     "detail on the Display tab.", Ps1Params, int(std::size(Ps1Params)), OwnPs1},
+     "detail on the Display tab, and turn the upscaler off on the Upscaling tab.",
+     Ps1Params, int(std::size(Ps1Params)), OwnPs1},
     {"tilt_shift", "Tilt-shift miniature", "Filters", "Depth blur that turns Yharnam into a miniature.",
      TiltShiftParams, int(std::size(TiltShiftParams)), OwnTiltShift},
     BB_LIBRETRO_FILTERS
