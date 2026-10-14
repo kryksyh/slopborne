@@ -280,49 +280,49 @@ static constexpr BbFilters::Param libretro_fast_sharpen[] = {
     {"DETAILS", "Details sharpened", 0.0f, 1.0f, 1.0f, 0.05f},
 };
 #define BB_LIBRETRO_FILTERS \
-    {"libretro_crt_lottes", "Lottes", "CRT", "crt/shaders/crt-lottes.glsl by Timothy Lottes (Public domain), libretro/glsl-shaders", libretro_crt_lottes, 13}, \
-    {"libretro_crt_lottes_mini", "Lottes mini", "CRT", "crt/shaders/crt-lottes-mini.glsl by DariusG 2024-25 (GPL-2.0-or-later), libretro/glsl-shaders", libretro_crt_lottes_mini, 7}, \
-    {"libretro_crt_hyllian_fast", "Hyllian fast", "CRT", "crt/shaders/hyllian/crt-hyllian-fast.glsl by metallic77 (MIT), libretro/glsl-shaders", libretro_crt_hyllian_fast, 6}, \
-    {"libretro_crt_hyllian_3d", "Hyllian 3D", "CRT", "crt/shaders/hyllian/crt-hyllian-3d.glsl by 2011-2016 Hyllian - sergiogdb@gmail.com (MIT), libretro/glsl-shaders", libretro_crt_hyllian_3d, 14}, \
-    {"libretro_crt_guest_sm", "Guest SM", "CRT", "crt/shaders/guest/crt-guest-sm.glsl by 2019 guest(r) - guest.r@gmail.com (GPL-2.0-or-later), libretro/glsl-shaders", libretro_crt_guest_sm, 17}, \
-    {"libretro_crt_gdv_mini", "GDV mini", "CRT", "crt/shaders/crt-gdv-mini.glsl by metallic77 (GPL-2.0-or-later), libretro/glsl-shaders", libretro_crt_gdv_mini, 16}, \
-    {"libretro_crt_caligari", "Caligari", "CRT", "crt/shaders/crt-caligari.glsl by 2011 caligari. (GPL-2.0-or-later), libretro/glsl-shaders", libretro_crt_caligari, 5}, \
-    {"libretro_crt_geom_mini", "Geom mini", "CRT", "crt/shaders/crt-geom-mini.glsl by DariusG 2024-2026. (MIT), libretro/glsl-shaders", libretro_crt_geom_mini, 6}, \
-    {"libretro_fake_crt_geom", "fake Geom", "CRT", "crt/shaders/fake-CRT-Geom.glsl by DariusG 2023-24-25 (GPL-2.0-or-later), libretro/glsl-shaders", libretro_fake_crt_geom, 16}, \
-    {"libretro_crt_nobody", "Nobody", "CRT", "crt/shaders/crt-nobody.glsl by 2011-2022 Hyllian - sergiogdb@gmail.com (MIT), libretro/glsl-shaders", libretro_crt_nobody, 5}, \
-    {"libretro_crt_blurpiscanlines", "blurPi scanlines", "CRT", "crt/shaders/crt-blurPiScanlines.glsl by Oriol Ferrer Mesià (armadillu) (MIT), libretro/glsl-shaders", libretro_crt_blurpiscanlines, 2}, \
-    {"libretro_zfast_crt", "zfast", "CRT", "crt/shaders/zfast_crt.glsl by 2017 Greg Hogan (SoltanGris42) (GPL-2.0-or-later), libretro/glsl-shaders", libretro_zfast_crt, 6}, \
-    {"libretro_zfast_crt_geo", "zfast curved", "CRT", "crt/shaders/zfast_crt_geo.glsl by 2017 Greg Hogan (SoltanGris42) (GPL-2.0-or-later), libretro/glsl-shaders", libretro_zfast_crt_geo, 2}, \
-    {"libretro_zfast_crt_composite", "zfast composite", "CRT", "crt/shaders/zfast_crt_composite.glsl by metallic 77. (GPL-2.0-or-later), libretro/glsl-shaders", libretro_zfast_crt_composite, 11}, \
-    {"libretro_zfast_crt_geo_svideo", "zfast curved S-Video", "CRT", "crt/shaders/zfast_crt_geo_svideo.glsl by 2017 Greg Hogan (SoltanGris42) (GPL-2.0-or-later), libretro/glsl-shaders", libretro_zfast_crt_geo_svideo, 4}, \
-    {"libretro_scanline_fract", "fract", "Scanlines", "scanlines/shaders/scanline-fract.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_scanline_fract, 3}, \
-    {"libretro_scanlines_sine_abs", "sine", "Scanlines", "scanlines/shaders/scanlines-sine-abs.glsl by RiskyJumps (Public domain), libretro/glsl-shaders", libretro_scanlines_sine_abs, 4}, \
-    {"libretro_res_independent_scanlines", "resolution independent", "Scanlines", "scanlines/shaders/res-independent-scanlines.glsl by RiskyJumps (Public domain), libretro/glsl-shaders", libretro_res_independent_scanlines, 0}, \
-    {"libretro_broadcast", "broadcast", "Scanlines", "scanlines/shaders/broadcast.glsl by the Free (GPL-2.0-or-later), libretro/glsl-shaders", libretro_broadcast, 4}, \
-    {"libretro_scanlinesimple", "simple", "Scanlines", "crt/shaders/torridgristle/ScanlineSimple.glsl by see the original header in the .comp file (Public domain), libretro/glsl-shaders", libretro_scanlinesimple, 0}, \
-    {"libretro_scanline_interpolation", "interpolated", "Scanlines", "crt/shaders/torridgristle/Scanline-Interpolation.glsl by see the original header in the .comp file (Public domain), libretro/glsl-shaders", libretro_scanline_interpolation, 0}, \
-    {"libretro_sharp_bilinear_scanlines", "sharp bilinear", "Scanlines", "interpolation/shaders/sharp-bilinear-scanlines.glsl by rsn8887 (based on TheMaister) (Public domain), libretro/glsl-shaders", libretro_sharp_bilinear_scanlines, 3}, \
-    {"libretro_dot", "dot matrix", "Handheld", "handheld/shaders/dot.glsl by Themaister (Public domain), libretro/glsl-shaders", libretro_dot, 4}, \
-    {"libretro_lcd3x", "LCD 3x", "Handheld", "handheld/shaders/lcd3x.glsl by Gigaherz (Public domain), libretro/glsl-shaders", libretro_lcd3x, 2}, \
-    {"libretro_lcd1x", "LCD 1x", "Handheld", "handheld/shaders/lcd1x.glsl by Gigaherz (Public domain), libretro/glsl-shaders", libretro_lcd1x, 2}, \
-    {"libretro_sameboy_lcd", "SameBoy LCD", "Handheld", "handheld/shaders/sameboy-lcd.glsl by LIJI32 (MIT), libretro/glsl-shaders", libretro_sameboy_lcd, 3}, \
-    {"libretro_zfast_lcd", "zfast LCD", "Handheld", "handheld/shaders/zfast_lcd.glsl by 2017 Greg Hogan (SoltanGris42) (GPL-2.0-or-later), libretro/glsl-shaders", libretro_zfast_lcd, 2}, \
-    {"libretro_retro_v2", "retro v2", "Handheld", "handheld/shaders/retro-v2.glsl by Hyllian and DOLLS! (GPL-2.0-or-later), libretro/glsl-shaders", libretro_retro_v2, 1}, \
-    {"libretro_bevel", "bevel", "Handheld", "handheld/shaders/bevel.glsl by 2011-2014 Hyllian/Jararaca - sergiogdb@gmail.com (GPL-2.0-or-later), libretro/glsl-shaders", libretro_bevel, 3}, \
-    {"libretro_gba_color", "GBA", "Handheld colors", "handheld/shaders/color/gba-color.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_gba_color, 1}, \
-    {"libretro_gbc_color", "GBC", "Handheld colors", "handheld/shaders/color/gbc-color.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_gbc_color, 1}, \
-    {"libretro_nds_color", "NDS", "Handheld colors", "handheld/shaders/color/nds-color.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_nds_color, 0}, \
-    {"libretro_psp_color", "PSP", "Handheld colors", "handheld/shaders/color/psp-color.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_psp_color, 0}, \
-    {"libretro_sharp_bilinear", "sharp bilinear", "Pixels", "interpolation/shaders/sharp-bilinear.glsl by Themaister (Public domain), libretro/glsl-shaders", libretro_sharp_bilinear, 2}, \
-    {"libretro_sharp_bilinear_simple", "sharp bilinear simple", "Pixels", "interpolation/shaders/sharp-bilinear-simple.glsl by rsn8887 (based on TheMaister) (Public domain), libretro/glsl-shaders", libretro_sharp_bilinear_simple, 0}, \
-    {"libretro_pixel_art_aa", "pixel art AA", "Pixels", "interpolation/shaders/pixel_art_AA.glsl by DariusG 2023 (GPL-2.0-or-later), libretro/glsl-shaders", libretro_pixel_art_aa, 1}, \
-    {"libretro_aann", "AANN", "Pixels", "interpolation/shaders/aann.glsl by jimbo1qaz and wareya (MIT), libretro/glsl-shaders", libretro_aann, 2}, \
-    {"libretro_bayer_matrix_dithering", "Bayer 8x8", "Dither", "dithering/shaders/bayer-matrix-dithering.glsl by Martins Upitis (Free to use (author statement in the header)), libretro/glsl-shaders", libretro_bayer_matrix_dithering, 2}, \
-    {"libretro_simple_dither", "simple", "Dither", "dithering/shaders/simple_dither.glsl by DariusG 2023 (GPL-2.0-or-later), libretro/glsl-shaders", libretro_simple_dither, 0}, \
-    {"libretro_gendither", "gendither", "Dither", "dithering/shaders/gendither.glsl by 2013-2014 leilei (GPL-2.0-or-later), libretro/glsl-shaders", libretro_gendither, 0}, \
-    {"libretro_cmyk_halftone_dot", "CMYK halftone", "Print", "misc/shaders/cmyk-halftone-dot.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_cmyk_halftone_dot, 1}, \
-    {"libretro_color_mangler", "mangler", "Color", "misc/shaders/color-mangler.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_color_mangler, 0}, \
-    {"libretro_grade_no_lut", "grade", "Color", "misc/shaders/grade-no-LUT.glsl by 2020-2023 Dogway (Jose Linares) (GPL-2.0-or-later), libretro/glsl-shaders", libretro_grade_no_lut, 0}, \
-    {"libretro_interlacing", "interlacing", "Video", "misc/shaders/interlacing.glsl by hunterk (Public domain), libretro/glsl-shaders", libretro_interlacing, 3}, \
-    {"libretro_adaptive_sharpen", "adaptive", "Sharpen", "sharpen/shaders/adaptive-sharpen.glsl by 2015, bacondither (BSD), libretro/glsl-shaders", libretro_adaptive_sharpen, 1}, \
-    {"libretro_fast_sharpen", "fast", "Sharpen", "sharpen/shaders/fast-sharpen.glsl by 2005 - 2019 guest(r) - guest.r@gmail.com (GPL-2.0-or-later), libretro/glsl-shaders", libretro_fast_sharpen, 3}, \
+    {"libretro_crt_lottes", "Lottes", "CRT", "Timothy Lottes", libretro_crt_lottes, 13}, \
+    {"libretro_crt_lottes_mini", "Lottes mini", "CRT", "DariusG", libretro_crt_lottes_mini, 7}, \
+    {"libretro_crt_hyllian_fast", "Hyllian fast", "CRT", "metallic77", libretro_crt_hyllian_fast, 6}, \
+    {"libretro_crt_hyllian_3d", "Hyllian 3D", "CRT", "Hyllian", libretro_crt_hyllian_3d, 14}, \
+    {"libretro_crt_guest_sm", "Guest SM", "CRT", "guest(r)", libretro_crt_guest_sm, 17}, \
+    {"libretro_crt_gdv_mini", "GDV mini", "CRT", "metallic77", libretro_crt_gdv_mini, 16}, \
+    {"libretro_crt_caligari", "Caligari", "CRT", "caligari", libretro_crt_caligari, 5}, \
+    {"libretro_crt_geom_mini", "Geom mini", "CRT", "DariusG", libretro_crt_geom_mini, 6}, \
+    {"libretro_fake_crt_geom", "fake Geom", "CRT", "DariusG", libretro_fake_crt_geom, 16}, \
+    {"libretro_crt_nobody", "Nobody", "CRT", "Hyllian", libretro_crt_nobody, 5}, \
+    {"libretro_crt_blurpiscanlines", "blurPi scanlines", "CRT", "Oriol Ferrer Mesià (armadillu)", libretro_crt_blurpiscanlines, 2}, \
+    {"libretro_zfast_crt", "zfast", "CRT", "Greg Hogan (SoltanGris42)", libretro_zfast_crt, 6}, \
+    {"libretro_zfast_crt_geo", "zfast curved", "CRT", "Greg Hogan (SoltanGris42)", libretro_zfast_crt_geo, 2}, \
+    {"libretro_zfast_crt_composite", "zfast composite", "CRT", "metallic 77", libretro_zfast_crt_composite, 11}, \
+    {"libretro_zfast_crt_geo_svideo", "zfast curved S-Video", "CRT", "Greg Hogan (SoltanGris42)", libretro_zfast_crt_geo_svideo, 4}, \
+    {"libretro_scanline_fract", "fract", "Scanlines", "hunterk", libretro_scanline_fract, 3}, \
+    {"libretro_scanlines_sine_abs", "sine", "Scanlines", "RiskyJumps", libretro_scanlines_sine_abs, 4}, \
+    {"libretro_res_independent_scanlines", "resolution independent", "Scanlines", "RiskyJumps", libretro_res_independent_scanlines, 0}, \
+    {"libretro_broadcast", "broadcast", "Scanlines", "libretro", libretro_broadcast, 4}, \
+    {"libretro_scanlinesimple", "simple", "Scanlines", "libretro", libretro_scanlinesimple, 0}, \
+    {"libretro_scanline_interpolation", "interpolated", "Scanlines", "libretro", libretro_scanline_interpolation, 0}, \
+    {"libretro_sharp_bilinear_scanlines", "sharp bilinear", "Scanlines", "rsn8887 (based on TheMaister)", libretro_sharp_bilinear_scanlines, 3}, \
+    {"libretro_dot", "dot matrix", "Handheld", "Themaister", libretro_dot, 4}, \
+    {"libretro_lcd3x", "LCD 3x", "Handheld", "Gigaherz", libretro_lcd3x, 2}, \
+    {"libretro_lcd1x", "LCD 1x", "Handheld", "Gigaherz", libretro_lcd1x, 2}, \
+    {"libretro_sameboy_lcd", "SameBoy LCD", "Handheld", "LIJI32", libretro_sameboy_lcd, 3}, \
+    {"libretro_zfast_lcd", "zfast LCD", "Handheld", "Greg Hogan (SoltanGris42)", libretro_zfast_lcd, 2}, \
+    {"libretro_retro_v2", "retro v2", "Handheld", "Hyllian and DOLLS!", libretro_retro_v2, 1}, \
+    {"libretro_bevel", "bevel", "Handheld", "Hyllian/Jararaca", libretro_bevel, 3}, \
+    {"libretro_gba_color", "GBA", "Handheld colors", "hunterk", libretro_gba_color, 1}, \
+    {"libretro_gbc_color", "GBC", "Handheld colors", "hunterk", libretro_gbc_color, 1}, \
+    {"libretro_nds_color", "NDS", "Handheld colors", "hunterk", libretro_nds_color, 0}, \
+    {"libretro_psp_color", "PSP", "Handheld colors", "hunterk", libretro_psp_color, 0}, \
+    {"libretro_sharp_bilinear", "sharp bilinear", "Pixels", "Themaister", libretro_sharp_bilinear, 2}, \
+    {"libretro_sharp_bilinear_simple", "sharp bilinear simple", "Pixels", "rsn8887 (based on TheMaister)", libretro_sharp_bilinear_simple, 0}, \
+    {"libretro_pixel_art_aa", "pixel art AA", "Pixels", "DariusG", libretro_pixel_art_aa, 1}, \
+    {"libretro_aann", "AANN", "Pixels", "jimbo1qaz and wareya", libretro_aann, 2}, \
+    {"libretro_bayer_matrix_dithering", "Bayer 8x8", "Dither", "Martins Upitis", libretro_bayer_matrix_dithering, 2}, \
+    {"libretro_simple_dither", "simple", "Dither", "DariusG", libretro_simple_dither, 0}, \
+    {"libretro_gendither", "gendither", "Dither", "leilei", libretro_gendither, 0}, \
+    {"libretro_cmyk_halftone_dot", "CMYK halftone", "Print", "hunterk", libretro_cmyk_halftone_dot, 1}, \
+    {"libretro_color_mangler", "mangler", "Color", "hunterk", libretro_color_mangler, 0}, \
+    {"libretro_grade_no_lut", "grade", "Color", "Dogway (Jose Linares)", libretro_grade_no_lut, 0}, \
+    {"libretro_interlacing", "interlacing", "Video", "hunterk", libretro_interlacing, 3}, \
+    {"libretro_adaptive_sharpen", "adaptive", "Sharpen", "bacondither", libretro_adaptive_sharpen, 1}, \
+    {"libretro_fast_sharpen", "fast", "Sharpen", "guest(r)", libretro_fast_sharpen, 3}, \

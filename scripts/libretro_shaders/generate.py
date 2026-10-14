@@ -26,9 +26,17 @@ def license_of(text):
 def author_of(text):
     for line in text[:2000].split('\n'):
         m = re.search(r'(?:copyright(?: \(c\))?|\bby|author:)\s+(.+)', line, re.I)
-        if m and not re.search(r'license|warranty|free software', m.group(1), re.I):
+        if m and not re.search(r'license|warranty|free software|^the free', m.group(1), re.I):
             return m.group(1).strip(' */')
-    return 'see the original header in the .comp file'
+    return 'libretro'  # no author in the header: the collection
+
+def clean_author(author):
+    """The author's name only: no years, e-mail addresses or copyright marks."""
+    a = re.sub(r'\S+@\S+', '', author)
+    a = re.sub(r'\(c\)|copyright', '', a, flags=re.I)
+    a = re.sub(r'\b(?:19|20)\d{2}(?:\s*[-,]\s*\d{2,4})*\b', '', a)
+    a = re.sub(r'\s+', ' ', a).strip(' .,-')
+    return a or 'unknown author'
 
 entries = []
 for line in (HERE / 'curated.txt').read_text().splitlines():
@@ -70,7 +78,7 @@ for n, p, i, l, a, params in entries:
 lines.append('#define BB_LIBRETRO_FILTERS \\')
 for n, p, i, l, a, params in entries:
     group, _, short = n.partition(': ')
-    about = f'{p} by {a} ({l}), libretro/glsl-shaders'
+    about = clean_author(a)  # licenses and sources: host_shaders/libretro/ATTRIBUTION.md
     lines.append(f'    {{{c_str("libretro_" + i)}, {c_str(short)}, {c_str(group)}, {c_str(about)}, '
                  f'libretro_{i}, {len(params)}}}, \\')
 lines.append('')

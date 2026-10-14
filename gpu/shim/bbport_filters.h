@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport: the Filters tab: every picture filter with its knobs. Libretro shaders (generated,
-// host_shaders/libretro/ATTRIBUTION.md) first, then the port's own depth-aware filters.
+// bbport: the Filters tab: every picture filter with its knobs. The port's own depth-aware
+// filters first, then the libretro shaders (generated, host_shaders/libretro/ATTRIBUTION.md).
 #pragma once
 
 #include <iterator>
@@ -43,7 +43,7 @@ inline constexpr Param CelParams[] = {
     {"edge", "Outline sensitivity", 0.25f, 4, 1, 0.05f},
     {"width", "Outline width", 1, 3, 1, 1},
     {"saturation", "Saturation", 0, 2, 1, 0.05f},
-    {"colors", "Color levels (0 = keep hue)", 0, 8, 0, 1},
+    {"colors", "Color levels", 0, 8, 0, 1},
 };
 inline constexpr Param RotoscopeDefaults[] = {
     {"bands", "Tone bands", 2, 6, 4, 1},
@@ -53,7 +53,7 @@ inline constexpr Param RotoscopeDefaults[] = {
     {"edge", "Outline sensitivity", 0.25f, 4, 1.4f, 0.05f},
     {"width", "Outline width", 1, 3, 2, 1},
     {"saturation", "Saturation", 0, 2, 1.25f, 0.05f},
-    {"colors", "Color levels (0 = keep hue)", 0, 8, 4, 1},
+    {"colors", "Color levels", 0, 8, 4, 1},
 };
 inline constexpr const char* InkPalettes =
     "Macintosh|IBM 5151 green|Zenith amber|Commodore 1084|LCD|Black on white|Sepia";
@@ -140,7 +140,7 @@ inline constexpr Param TiltShiftParams[] = {
 };
 
 inline constexpr Param Ps1Params[] = {
-    {"jitter", "Vertex jitter (grid rows, 0 = off)", 0, 480, 240, 30},
+    {"jitter", "Vertex jitter", 0, 480, 240, 30},
     {"nearest", "Unfiltered textures", 0, 1, 1, 1},
     {"colors", "15-bit color", 0, 1, 1, 1},
     {"dither", "PS1 dither", 0, 1, 1, 1},
@@ -150,49 +150,45 @@ inline constexpr Param Ps1Params[] = {
 /// The knob `k` of the selected filter when it is the `own` filter, else `fallback`.
 float ActiveOwnKnob(int own, int k, float fallback);
 
-inline constexpr const char* OwnAbout = "Depth-aware filter of the macOS port";
-
 inline constexpr Filter All[] = {
-    BB_LIBRETRO_FILTERS
-    {"cel", "Cel shading", "Stylized", "Flat tone bands and depth outlines. Port filter.",
-     CelParams, int(std::size(CelParams)), OwnCel},
-    {"rotoscope", "Rotoscope", "Stylized",
-     "A Scanner Darkly: posterized colors, thick outlines. Port filter (cel shading preset).",
+    {"cel", "Cel shading", "Filters", "Flat tone bands with depth outlines.", CelParams,
+     int(std::size(CelParams)), OwnCel},
+    {"rotoscope", "Rotoscope", "Filters", "Posterized colors and thick outlines, like A Scanner Darkly.",
      RotoscopeDefaults, int(std::size(RotoscopeDefaults)), OwnCel},
-    {"obra_dinn", "Obra Dinn", "Stylized",
-     "1-bit cel tones with a camera-stable dither, after Lucas Pope's Return of the Obra Dinn. "
-     "Port filter.", ObraParams, int(std::size(ObraParams)), OwnObraDinn},
-    {"sin_city", "Sin City", "Stylized", "Hard black and white; only blood stays red. Port filter.",
-     SinCityParams, int(std::size(SinCityParams)), OwnSinCity},
-    {"engraving", "Victorian engraving", "Illustration",
-     "Banknote-style line hatching that follows the tone. Port filter.", EngravingParams,
-     int(std::size(EngravingParams)), OwnEngraving},
-    {"pencil", "Pencil sketch", "Illustration",
-     "Cross-hatching along the surfaces (normals from depth). Port filter.", PencilParams,
+    {"obra_dinn", "Obra Dinn", "Filters",
+     "1-bit look after Lucas Pope's Return of the Obra Dinn.", ObraParams,
+     int(std::size(ObraParams)), OwnObraDinn},
+    {"sin_city", "Sin City", "Filters", "Black and white; only blood stays red.", SinCityParams,
+     int(std::size(SinCityParams)), OwnSinCity},
+    {"engraving", "Victorian engraving", "Filters", "Banknote-style line hatching.",
+     EngravingParams, int(std::size(EngravingParams)), OwnEngraving},
+    {"pencil", "Pencil sketch", "Filters", "Pencil cross-hatching.", PencilParams,
      int(std::size(PencilParams)), OwnPencil},
-    {"oil", "Oil paint", "Painting", "Kuwahara brush strokes. Port filter.", OilParams,
+    {"oil", "Oil paint", "Filters", "Oil paint brush strokes.", OilParams,
      int(std::size(OilParams)), OwnOil},
-    {"watercolor", "Watercolor", "Painting",
-     "Soft washes, pigment edges, paper grain. Port filter.", WatercolorParams,
+    {"watercolor", "Watercolor", "Filters", "Watercolor washes on paper.", WatercolorParams,
      int(std::size(WatercolorParams)), OwnWatercolor},
-    {"ascii", "ASCII art", "Fun", "Characters by brightness. Port filter.", AsciiParams,
+    {"ascii", "ASCII art", "Filters", "Characters by brightness.", AsciiParams,
      int(std::size(AsciiParams)), OwnAscii},
-    {"datamosh", "Datamosh", "Fun",
-     "Frames smeared along the motion vectors, like a broken video codec. Port filter.",
+    {"datamosh", "Datamosh", "Filters", "Frames smeared like a broken video codec.",
      DatamoshParams, int(std::size(DatamoshParams)), OwnDatamosh},
-    {"vision", "Thermal / night vision", "Fun", "Heat palette or green night vision. Port filter.",
-     VisionParams, int(std::size(VisionParams)), OwnVision},
-    {"lines", "Tron / Blueprint", "Fun", "Only the depth outlines, glowing. Port filter.",
-     LinesParams, int(std::size(LinesParams)), OwnLines},
-    {"ps1", "PlayStation", "Retro console",
-     "Vertices snap to a coarse grid (the PS1 wobble), unfiltered textures, 15-bit color with "
-     "the PS1's 4x4 dither. For its low polygon counts: Display > Model detail > Lowest; for "
-     "240p: Display > Scene size 428 x 240. Changing the jitter rebuilds shaders for a moment. "
-     "Port filter.", Ps1Params, int(std::size(Ps1Params)), OwnPs1},
-    {"tilt_shift", "Tilt-shift miniature", "Fun",
-     "Depth blur around a focus distance: Yharnam as a diorama. Port filter.", TiltShiftParams,
-     int(std::size(TiltShiftParams)), OwnTiltShift},
+    {"vision", "Thermal / night vision", "Filters", "Thermal or night vision.", VisionParams,
+     int(std::size(VisionParams)), OwnVision},
+    {"lines", "Tron / Blueprint", "Filters", "Glowing outlines only.", LinesParams,
+     int(std::size(LinesParams)), OwnLines},
+    {"ps1", "PlayStation", "Filters",
+     "For better results, set the lowest render resolution (216p) and the lowest level of "
+     "detail on the Display tab.", Ps1Params, int(std::size(Ps1Params)), OwnPs1},
+    {"tilt_shift", "Tilt-shift miniature", "Filters", "Depth blur that turns Yharnam into a miniature.",
+     TiltShiftParams, int(std::size(TiltShiftParams)), OwnTiltShift},
+    BB_LIBRETRO_FILTERS
 };
 inline constexpr int Count = int(std::size(All));
+/// The port's own filters come first in All, the libretro ones after them in RetroShaders order.
+inline constexpr int OwnEntries = [] {
+    int n = 0;
+    for (const auto& f : All) n += f.own != OwnNone;
+    return n;
+}();
 
 } // namespace BbFilters

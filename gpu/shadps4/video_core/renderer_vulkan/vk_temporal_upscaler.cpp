@@ -924,9 +924,11 @@ void TemporalUpscaler::RetroFilter(vk::CommandBuffer cmdbuf, vk::ImageView sourc
             PENCIL_COMP,    OIL_PAINT_COMP, WATERCOLOR_COMP, ASCII_ART_COMP,
             DATAMOSH_COMP,  VISION_COMP,    EDGE_LINES_COMP, TILT_SHIFT_COMP,
             PS1_COMP};
-        // The libretro filters come first in BbFilters::All, in RetroShaders order.
+        // The port's own filters come first in BbFilters::All, then the libretro ones in
+        // RetroShaders order.
         const int own = BbFilters::All[filter].own;
-        const std::span<const u32> code = own < 0 ? RetroShaders[filter] : own_code[own];
+        const std::span<const u32> code =
+            own < 0 ? RetroShaders[filter - BbFilters::OwnEntries] : own_code[own];
         auto module = Check(device.createShaderModuleUnique(
             {.codeSize = code.size_bytes(), .pCode = code.data()}));
         pipeline = Check(device.createComputePipelineUnique(

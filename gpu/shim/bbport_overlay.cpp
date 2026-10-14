@@ -235,9 +235,6 @@ void ControllerMenu() {
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
-    ImGui::TextWrapped("%s", T("Steam or controller firmware can hide the printed layout. "
-                               "Choose Nintendo for Nintendo-style 8BitDo buttons."));
-    ImGui::TextWrapped("%s", T("Button labels change the game glyphs after restart. Controls stay the same."));
     if (!prompt_connected) return;
     for (int i = 0; i < 4; ++i) {
         ImGui::Text("%s -> [%s]", T(BbPrompts::PsNames[i]), T(FaceLabel(i)));
@@ -267,7 +264,6 @@ void ControllerMenu() {
             }
             ImGui::TextUnformatted(T("Calibration saved for this controller type."));
         }
-        ImGui::TextWrapped("%s", T("Recalibrate after changing Steam or firmware mappings."));
     }
 }
 
@@ -331,13 +327,13 @@ void DisplayMenu() {
         ImGui::EndCombo();
     }
     Hint(T("Size of the final picture and the interface."));
-    Checkbox(T("FPS counter in the corner"), s.show_fps);
+    Checkbox(T("FPS counter"), s.show_fps);
 
-    ImGui::SeparatorText(T("Frame rate (after restart)"));
+    ImGui::SeparatorText(T("Frame rate (requires restart)"));
     // No cap below 30: the game advances at most one 30 FPS frame (33.3 ms) per frame, so it
     // plays in slow motion below that (a run measured 8.5 s uncapped, 10.5 s at 25 FPS).
     static constexpr int limits[] = {30, 40, 60, 120};
-    static const char* limit_labels[] = {T("30 FPS (as on PS4)"), T("40 FPS"), T("60 FPS"),
+    static const char* limit_labels[] = {T("30 FPS (vanilla)"), T("40 FPS"), T("60 FPS"),
                                          T("Uncapped (up to 120 FPS)")};
     int limit_index = 0;
     for (int i = 0; i < 4; ++i) {
@@ -351,8 +347,6 @@ void DisplayMenu() {
         }
         ImGui::EndCombo();
     }
-    Hint(T("A rate the display's refresh divides evenly looks smoothest. Below 30 FPS the game "
-           "runs in slow motion; above 120 its movement timing breaks."));
 
     ImGui::SeparatorText(T("Render resolution"));
     if (s.output_res == BbSettings::OutputDefault) {
@@ -368,8 +362,6 @@ void DisplayMenu() {
             }
             ImGui::EndCombo();
         }
-        Hint(T("The size the game draws its 3D scene at. Smaller is much faster; the interface "
-               "stays at the output size. Applies after a game restart."));
     } else {
         int preset = s.preset;
         char preset_label[64];
@@ -394,8 +386,6 @@ void DisplayMenu() {
             }
             ImGui::EndCombo();
         }
-        Hint(T("The 3D scene relative to the output size; the interface stays at the output "
-               "size."));
     }
     const bool reduced = SceneReduced();
     ImGui::TextDisabled(T("Now: scene %d x %d, %s"), s.active_render_width.load(),
@@ -403,7 +393,7 @@ void DisplayMenu() {
                         reduced ? UpscalerLabel(s.upscaler, true) : T("no upscaling"));
     if (reduced) Because(T("The Upscaling tab chooses how the smaller scene fills the screen."));
 
-    ImGui::SeparatorText(T("Game detail (after restart)"));
+    ImGui::SeparatorText(T("Game detail (requires restart)"));
     static const char* lods[] = {T("Highest (-2)"), T("As in the game"), T("Lower (1)"),
                                  T("Lowest (2)")};
     static constexpr int lod_values[] = {-2, 0, 1, 2};
@@ -411,7 +401,7 @@ void DisplayMenu() {
     for (int i = 0; i < 4; ++i) {
         if (lod_values[i] == s.model_lod) lod_index = i;
     }
-    if (ImGui::BeginCombo(T("Model detail"), lods[lod_index])) {
+    if (ImGui::BeginCombo(T("Model detail (LOD)"), lods[lod_index])) {
         for (int i = 0; i < 4; ++i) {
             if (ImGui::Selectable(lods[i], i == lod_index)) {
                 Store(s.model_lod, lod_values[i], true);
@@ -456,8 +446,7 @@ void UpscalingMenu() {
             choice(BbSettings::UpscalerStretch, T("plain scaling: no smearing, softer"));
             ImGui::EndCombo();
         }
-        Hint(T("Fills the screen from the smaller scene. Temporal upscalers rebuild detail from "
-               "several frames (sharper, can smear in motion); bilinear stretch just scales."));
+        Hint(T("Temporal upscalers cause some smearing but are generally sharper. Prefer MetalFX."));
     } else {
         ImGui::SeparatorText(T("Anti-aliasing"));
         if (ImGui::BeginCombo(T("Anti-aliasing"), UpscalerLabel(shown, false))) {
@@ -497,8 +486,8 @@ void UpscalingMenu() {
     ImGui::SeparatorText(T("Temporal details"));
     ImGui::BeginDisabled(!temporal);
     Checkbox(T("Subpixel jitter"), s.jitter);
-    Hint(T("The scene shifts by a fraction of a pixel each frame so the upscaler gathers more "
-           "detail. Keep it on with MetalFX and FSR."));
+    Hint(T("Meant to give temporal upscalers sharper detail, but far too strong in practice. "
+           "Not recommended."));
     ImGui::BeginDisabled(taa);
     Checkbox(T("Reactive mask"), s.reactive);
     Hint(T("Marks transparent effects (particles, haze) so the upscaler relies less on past "
@@ -511,9 +500,9 @@ void UpscalingMenu() {
         ImGui::Unindent();
     }
     ImGui::EndDisabled();
-    Checkbox(T("Character motion vectors (after restart)"), s.object_motion);
-    Hint(T("Exact motion for animated characters: less smearing on moving enemies, about a "
-           "fifth of the frame rate. Experimental."));
+    Checkbox(T("Character motion vectors (requires restart)"), s.object_motion);
+    Hint(T("Exact motion for animated characters, meant to reduce smearing on moving enemies. "
+           "Experimental."));
     if (BbSettings::IsFsr4(s.upscaler)) {
         Checkbox(T("FSR 4: auto exposure"), s.fsr4_auto_exposure);
         Checkbox(T("FSR 4: inverted jitter sign"), s.fsr4_invert_jitter);
@@ -542,11 +531,6 @@ void FiltersMenu() {
         s.output_res == BbSettings::OutputDefault) {
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s",
                            T("Filters start with the next game start: use Apply and restart below."));
-    } else {
-        ImGui::TextDisabled(T("Scene %d x %d (Display tab: render resolution). Smaller sizes give "
-                              "chunkier pixels."),
-                            BbSettings::Get().active_render_width.load(),
-                            BbSettings::Get().active_render_height.load());
     }
     ImGui::SeparatorText(T("Filter"));
     const int current = s.retro_filter;
@@ -584,7 +568,6 @@ void FiltersMenu() {
         Store(s.retro_filter, int(1 + (seed >> 8) % BbFilters::Count), true);
     }
     if (current <= 0) {
-        ImGui::TextDisabled("%s", T("No filter."));
         return;
     }
     const int index = current - 1;
@@ -684,13 +667,13 @@ void AdvancedMenu() {
         Because(T("At 1080p the scene size is set on the Display tab (applies after a restart)."));
     }
     ImGui::SeparatorText(T("Shader compilation"));
-    Checkbox(T("Async shader compilation (after restart)"), s.async_pipelines);
+    Checkbox(T("Async shader compilation (requires restart)"), s.async_pipelines);
     Hint(T("Removes the stutter when something is seen for the first time: a new area, enemy "
            "or attack. The first time only, an enemy or character can show for a moment as a "
            "plain dark figure or not at all, an effect can be missing for a moment, and "
            "loading screens can take a little longer. Applies after a game restart."));
 
-    ImGui::SeparatorText(T("Developer tools (after restart)"));
+    ImGui::SeparatorText(T("Developer tools (requires restart)"));
     EffectOptions(EffectPage::Debug);
     ImGui::TextWrapped("%s", T("Free camera: hold Cross and press L3 (keyboard: Space + Z). Debug menu: left touchpad "
                               "/ Tab. Needs DbgFont14h.ccm and DbgFont14h.tpf in dvdroot_ps4/font from Nexus mod "
@@ -757,10 +740,10 @@ void Menu() {
                 if (i == PageFilters) FiltersMenu();
                 if (i == PageControls) ControllerMenu();
                 if (i == PageGameplay) {
-                    ImGui::SeparatorText(T("Gameplay preferences (after restart)"));
+                    ImGui::SeparatorText(T("Gameplay preferences (requires restart)"));
                     EffectOptions(EffectPage::Gameplay);
                     ImGui::Spacing();
-                    if (ImGui::CollapsingHeader(T("Cheats (after restart)"))) EffectOptions(EffectPage::Cheats);
+                    if (ImGui::CollapsingHeader(T("Cheats (requires restart)"))) EffectOptions(EffectPage::Cheats);
                 }
                 if (i == PageAdvanced) AdvancedMenu();
                 ImGui::PopItemWidth();
