@@ -1,5 +1,6 @@
 """Synthetic archive tests; no copyrighted game assets required or removed."""
 from paths import ROOT
+import contextlib
 import importlib.util
 import os
 from pathlib import Path
@@ -142,6 +143,57 @@ class GlyphTests(unittest.TestCase):
                 command = run.call_args.args[0]
                 self.assertEqual(command[command.index('--app0') + 1], str(expected))
                 self.assertTrue(mods.exists())
+
+
+    def test_launcher_cleanup_removes_link_views_and_keeps_the_game(self):
+        """Outside macOS the launcher deletes the mod and glyph views after the game. They are
+        links into the game folder (on Windows without Developer Mode: junctions and hard
+        links), so the real rmtree must remove them without touching a single target."""
+        root = Path(tempfile.mkdtemp(prefix='glyph-cleanup-test-', dir=ROOT / 'out'))
+        game = root / 'game'
+        files = {'eboot.bin': b'eboot', 'dvdroot_ps4/menu/common.tpf.dcx': b'menu',
+                 'dvdroot_ps4/menu/other.gfx': b'gfx', 'dvdroot_ps4/map/m10.bin': b'map'}
+        for name, data in files.items():
+            (game / name).parent.mkdir(parents=True, exist_ok=True)
+            (game / name).write_bytes(data)
+        patched = root / 'patched.dcx'
+        patched.write_bytes(b'patched')
+        # Windows: the fallback links (junctions, hard links), as without Developer Mode.
+        no_symlinks = (patch.object(Path, 'symlink_to', side_effect=OSError('no symlink privilege'))
+                       if os.name == 'nt' else contextlib.nullcontext())
+        with no_symlinks:
+            mod_view = root / 'mod-view'
+            mod_view.mkdir()
+            for entry in game.iterdir():
+                glyphs.make_link(mod_view / entry.name, entry)
+            glyph_view = glyphs.asset_view(mod_view, patched, root)
+        if os.name == 'nt':
+            self.assertFalse((mod_view / 'dvdroot_ps4').is_symlink())  # a junction
+            self.assertEqual(os.stat(game / 'eboot.bin').st_nlink, 3)  # game, mod and glyph views
+        probe = root / 'bb-probe'
+        probe.touch()
+        (root / ('bb-controller-info' + launcher.EXE)).touch()
+        views = {'mods.py': str(mod_view), 'button_glyphs.py': str(glyph_view)}
+
+        def script(name, *args, **kwargs):
+            return views.get(name, '')
+        env = dict(BB_DATA_DIR=str(root / 'data'), BB_PROBE=str(probe), BB_GAME_DIR=str(game),
+                   BB_FORCE_PATCHES='1')
+        with patch.dict(os.environ, env, clear=True), \
+             patch.object(launcher.sys, 'platform', 'win32' if os.name == 'nt' else 'linux'), \
+             patch.object(launcher.sys, 'argv', ['run.py']), \
+             patch.object(launcher.os, 'chdir'), \
+             patch.object(launcher, 'run_script', side_effect=script), \
+             patch.object(launcher, 'install_pipeline_list'), \
+             patch.object(launcher.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(launcher.main(), 0)
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--app0') + 1], str(glyph_view))
+        self.assertFalse(glyph_view.exists())
+        self.assertFalse(mod_view.exists())
+        for name, data in files.items():
+            self.assertEqual((game / name).read_bytes(), data, name)
+        self.assertEqual(patched.read_bytes(), b'patched')
 
 
 if __name__ == '__main__':

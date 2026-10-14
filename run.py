@@ -245,14 +245,17 @@ def main():
                            '--config', env.get('BB_MODS_CONFIG', data / 'mods.json'),
                            '--enabled', env.get('BB_MODS_ENABLED', '1'), capture=True).strip())
     mod_view = game if game.resolve() != original_game else None
+    glyph_view = None
     try:
         # The helper uses the same SDL identity/calibration as the overlay.
         # Generate a retained view after user mods, without editing their files.
         helper = probe.parent / ('bb-controller-info' + EXE)
         if helper.is_file():
             try:
-                game = Path(run_script('button_glyphs.py', game, '--out', out,
+                view = Path(run_script('button_glyphs.py', game, '--out', out,
                                        '--helper', helper, capture=True, optional=True).strip())
+                glyph_view = view if view != game else None
+                game = view
             except (OSError, ValueError, StopIteration, subprocess.SubprocessError) as error:
                 print(f'Controller glyphs: could not prepare replacements: {error}; using original icons')
         else:
@@ -337,8 +340,11 @@ def main():
     finally:
         # macOS glyph views may reference a user-mod view. Retain both, along
         # with all original files, so an existing view always stays usable.
-        if mod_view and sys.platform != 'darwin':
-            shutil.rmtree(mod_view, ignore_errors=True)
+        # Elsewhere both go once the game ends (links only: the targets are kept).
+        if sys.platform != 'darwin':
+            for view in (glyph_view, mod_view):
+                if view:
+                    shutil.rmtree(view, ignore_errors=True)
 
 
 if __name__ == '__main__':
