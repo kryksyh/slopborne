@@ -108,8 +108,12 @@ static void CountPass(void* reopened_after, void* caller, const RenderState& sta
         top.emplace_back(value[1], value[0], key.first, key.second);
     }
     std::ranges::sort(top, std::greater{});
+#ifdef _WIN32
+    struct { void* dli_fbase; } self{nullptr};
+#else
     Dl_info self{};
     dladdr(reinterpret_cast<void*>(&CountPass), &self);
+#endif
     const auto offset = [&](void* address) {
         return static_cast<unsigned long>(reinterpret_cast<uintptr_t>(address) -
                                           reinterpret_cast<uintptr_t>(self.dli_fbase));

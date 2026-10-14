@@ -447,6 +447,11 @@ void UpscalingMenu() {
                  ? s.metalfx_supported.load() : true;
     };
     const auto choice = [&](int u, const char* about) {
+#ifndef __APPLE__
+        if (u == BbSettings::UpscalerMetalFx || u == BbSettings::UpscalerMetalFxSpatial) {
+            return;
+        }
+#endif
         ImGui::BeginDisabled(!supported(u));
         if (ImGui::Selectable(UpscalerLabel(u, reduced), s.upscaler == u)) {
             Store(s.upscaler, u, true);
@@ -474,7 +479,11 @@ void UpscalingMenu() {
             choice(BbSettings::UpscalerNearest, T("plain scaling: hard pixels"));
             ImGui::EndCombo();
         }
+#ifdef __APPLE__
         Hint(T("Temporal upscalers cause some smearing but are generally sharper. Prefer MetalFX."));
+#else
+        Hint(T("Temporal upscalers cause some smearing but are generally sharper."));
+#endif
     } else {
         ImGui::SeparatorText(T("Anti-aliasing"));
         if (ImGui::BeginCombo(T("Anti-aliasing"), UpscalerLabel(shown, false))) {
@@ -508,7 +517,11 @@ void UpscalingMenu() {
     Hint(T("Up to 1: the upscaler's own sharpening. Above 1 an extra pass is added."));
     ImGui::EndDisabled();
     ImGui::EndDisabled();
+#ifdef __APPLE__
     if (!temporal || taa) Because(T("For MetalFX, FSR and DLSS."));
+#else
+    if (!temporal || taa) Because(T("For FSR and DLSS."));
+#endif
 
     ImGui::SeparatorText(T("Temporal details"));
     ImGui::BeginDisabled(!temporal);

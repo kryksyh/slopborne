@@ -1,0 +1,65 @@
+From: bbport
+Subject: [PATCH] FFX 1.1.4: include <stdlib.h>, <wchar.h>, <cmath>, <new> (libc++ 23)
+
+---
+diff --git a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+index d3e4eac..92dd4ef 100644
+--- a/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/backends/vk/ffx_vk.cpp
+@@ -27,6 +27,8 @@
+ #include <FidelityFX/host/backends/vk/ffx_vk.h>
+ #include <ffx_shader_blobs.h>
+ #include <ffx_breadcrumbs_list.h>
++#include <cmath> // bbport: log2; libc++ does not include it transitively
++#include <new> // bbport: placement new; libc++ does not include it transitively
+ 
+ #ifdef _WIN32
+ #include <windows.h>
+diff --git a/upstream/ffx-1.1.4/sdk/src/components/frameinterpolation/ffx_frameinterpolation.cpp b/upstream/ffx-1.1.4/sdk/src/components/frameinterpolation/ffx_frameinterpolation.cpp
+index b8f48c0..1fe6e13 100644
+--- a/upstream/ffx-1.1.4/sdk/src/components/frameinterpolation/ffx_frameinterpolation.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/components/frameinterpolation/ffx_frameinterpolation.cpp
+@@ -24,6 +24,7 @@
+ #include <cmath>        // for fabs, abs, sinf, sqrt, etc.
+ #include <string>       // for memset
+ #include <cfloat>       // for FLT_EPSILON
++#include <stdlib.h>     // bbport: _countof; libc++ does not include it transitively
+ #include <FidelityFX/host/ffx_frameinterpolation.h>
+ 
+ #define FFX_CPU
+diff --git a/upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp b/upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+index 94bf581..2429350 100644
+--- a/upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+@@ -24,6 +24,7 @@
+ #include <cmath>        // for fabs, abs, sinf, sqrt, etc.
+ #include <string.h>     // for memset
+ #include <cfloat>       // for FLT_EPSILON
++#include <stdlib.h>     // bbport: _countof; libc++ does not include it transitively
+ #include <FidelityFX/host/ffx_fsr3upscaler.h>
+ 
+ #define FFX_CPU
+diff --git a/upstream/ffx-1.1.4/sdk/src/components/opticalflow/ffx_opticalflow.cpp b/upstream/ffx-1.1.4/sdk/src/components/opticalflow/ffx_opticalflow.cpp
+index ae94c2d..474b8b6 100644
+--- a/upstream/ffx-1.1.4/sdk/src/components/opticalflow/ffx_opticalflow.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/components/opticalflow/ffx_opticalflow.cpp
+@@ -24,6 +24,7 @@
+ #include <cmath>        // for fabs, abs, sinf, sqrt, etc.
+ #include <string>       // for memset
+ #include <cfloat>       // for FLT_EPSILON
++#include <stdlib.h>     // bbport: _countof; libc++ does not include it transitively
+ #include "FidelityFX/host/ffx_opticalflow.h"
+ 
+ #ifdef __clang__
+diff --git a/upstream/ffx-1.1.4/sdk/src/shared/ffx_message.cpp b/upstream/ffx-1.1.4/sdk/src/shared/ffx_message.cpp
+index e325a05..f45fe9d 100644
+--- a/upstream/ffx-1.1.4/sdk/src/shared/ffx_message.cpp
++++ b/upstream/ffx-1.1.4/sdk/src/shared/ffx_message.cpp
+@@ -28,6 +28,7 @@
+ #define WIN32_LEAN_AND_MEAN
+ #endif
+ #include <windows.h>  // required for OutputDebugString()
++#include <wchar.h>    // bbport: swprintf_s; libc++ does not include it transitively
+ #endif                // #ifdef _WIN32
+ 
+ static ffxMessageCallback s_messageCallback;
