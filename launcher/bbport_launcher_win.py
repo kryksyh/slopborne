@@ -1031,12 +1031,12 @@ class Launcher:
                        'Нажмите «Назначить…» в строке кнопки, чтобы привязать кнопку мыши '
                        'вместо клавиши — левую, среднюю, правую или боковые (вперёд/назад), '
                        'если они есть. Направления стиков можно привязать только к клавише.'))
-        self.note(f, _('Reserved: Insert/Escape (the port\'s menu), F9 (route recording), and '
+        self.note(f, _('Reserved: Insert/Escape (the port\'s menu), F9 (route recording), F11 (fullscreen), and '
                        'whichever key toggles mouse look or reloads input.ini (F7/F8 by '
                        'default). A key or button already used elsewhere is simply bound to '
                        'both actions (hold it to trigger both) — this page does not warn about '
                        'that.',
-                       'Зарезервированы: Insert/Escape (меню порта), F9 (запись маршрута), а '
+                       'Зарезервированы: Insert/Escape (меню порта), F9 (запись маршрута), F11 (полный экран), а '
                        'также клавиши переключения мыши и перезагрузки input.ini (по умолчанию '
                        'F7/F8). Если клавиша или кнопка уже где-то занята, она просто '
                        'срабатывает на обе привязки — страница об этом не предупреждает.'))

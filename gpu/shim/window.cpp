@@ -11,6 +11,7 @@
 #include "sdl_window.h"
 #include "bbport_mouse.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 #include "bloodborne_cam.h"
 
 namespace Frontend {
@@ -21,6 +22,9 @@ namespace {
 // it rather than stacking. One expiry timestamp per direction, window-thread only.
 constexpr uint32_t kWheelPulseMs = 33;
 std::array<uint64_t, 4> g_wheel_expiry_ms{}; // index: WHEEL_UP=0, DOWN=1, LEFT=2, RIGHT=3
+// The window mode last requested from SDL; BbSettings::fullscreen is the wanted one (the menu
+// changes it from the render thread). Window-thread only.
+bool g_fullscreen_requested = false;
 } // namespace
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
@@ -40,8 +44,8 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
 #else
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
 #endif
-    const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen && fullscreen[0] == '1');
+    g_fullscreen_requested = BbSettings::Get().fullscreen; // BB_FULLSCREEN applied by Load()
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, g_fullscreen_requested);
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -144,6 +148,21 @@ bool WindowSDL::PollEvents() {
                 reload_requested.store(true, std::memory_order_relaxed);
                 continue;
             }
+            // Alt+Enter / F11: fullscreen, saved at once (the menu is usually closed).
+            if (scancode == SDL_SCANCODE_F11 ||
+                ((scancode == SDL_SCANCODE_RETURN || scancode == SDL_SCANCODE_KP_ENTER) &&
+                 (event.key.mod & SDL_KMOD_ALT))) {
+                auto& settings = BbSettings::Get();
+                settings.fullscreen = !settings.fullscreen;
+                BbSettings::Save();
+                continue;
+            }
+        }
+        // Fullscreen left or entered another way (the OS): the setting follows the window.
+        if (event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN ||
+            event.type == SDL_EVENT_WINDOW_LEAVE_FULLSCREEN) {
+            g_fullscreen_requested = event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN;
+            BbSettings::Get().fullscreen = g_fullscreen_requested;
         }
         if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) {
             window_focused = true;
@@ -226,6 +245,10 @@ bool WindowSDL::PollEvents() {
         default:
             break;
         }
+    }
+    if (const bool wanted = BbSettings::Get().fullscreen; wanted != g_fullscreen_requested) {
+        g_fullscreen_requested = wanted;
+        SDL_SetWindowFullscreen(window, wanted);
     }
     // MOU-004: re-evaluated every PollEvents (not only on the events that could change it),
     // because the menu can also close from the render thread (bbport_overlay.cpp's "Close"

@@ -354,6 +354,8 @@ void DisplayMenu() {
         ImGui::EndCombo();
     }
     Hint(T("Size of the final picture and the interface."));
+    Checkbox(T("Fullscreen"), s.fullscreen);
+    Hint(T("Also Alt+Enter or F11."));
     Checkbox(T("FPS counter"), s.show_fps);
 
     ImGui::SeparatorText(T("Frame rate (requires restart)"));

@@ -296,6 +296,8 @@
 {"Developer tools (requires restart)", "Инструменты разработчика (нужен перезапуск)"},
 {"Exact motion for animated characters, meant to reduce smearing on moving enemies. Experimental.", "Точное движение анимированных персонажей, чтобы движущиеся враги меньше размывались. Экспериментально."},
 {"FPS counter", "Счётчик FPS"},
+{"Fullscreen", "Полный экран"},
+{"Also Alt+Enter or F11.", "Также Alt+Enter или F11."},
 {"Filter", "Фильтр"},
 {"Filters start with the next game start: use Apply and restart below.", "Фильтр включится при следующем запуске игры: нажмите «Применить и перезапустить игру» ниже."},
 {"For MetalFX, FSR and DLSS.", "Для MetalFX, FSR и DLSS."},

@@ -288,7 +288,9 @@ def game_environment(config, game):
     env.setdefault('BB_BOUNDED_BUFFER_READS', '1')
     # Frame-time game timing; the cap is the in-game menu's frame_limit (bbport.ini, 30 by default).
     env.setdefault('BB_FPS', 'uncap')
-    env.setdefault('BB_FULLSCREEN', '1' if config['fullscreen'] else '0')
+    # Fullscreen is the menu's setting (bbport.ini, Alt+Enter); config.json can only force it on.
+    if config['fullscreen']:
+        env.setdefault('BB_FULLSCREEN', '1')
     return env
 
 

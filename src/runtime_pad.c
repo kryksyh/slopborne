@@ -130,7 +130,10 @@ typedef struct {
  * caller -- see OUT-004/OUT-005). */
 static int binding_held(const HostState *host, const InputBinding *b) {
     switch (b->kind) {
-    case IN_KEY: return host->keys && host->keys[b->value];
+    case IN_KEY: /* Enter with Alt held toggles fullscreen (window.cpp), not a game button */
+        return host->keys && host->keys[b->value] &&
+               !((b->value==SDL_SCANCODE_RETURN || b->value==SDL_SCANCODE_KP_ENTER) &&
+                 (host->keys[SDL_SCANCODE_LALT] || host->keys[SDL_SCANCODE_RALT]));
     case IN_CBUTTON: return host->gamepad && SDL_GetGamepadButton(host->gamepad,(SDL_GamepadButton)b->value);
     case IN_AXIS: {
         /* OUT-004: a trigger (l2/r2) bound to a button-like output uses the 0..255 trigger

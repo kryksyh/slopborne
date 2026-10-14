@@ -68,7 +68,7 @@ BINDABLE_NAMES_SET = KEY_NAMES_SET | MOUSE_BUTTON_NAMES_SET
 # whichever key currently toggles the mouse or reloads input.ini. The last two are read from the
 # file itself (hotkey_toggle_mouse_to_joystick / hotkey_reload_inputs) by reserved_keys() below.
 # Escape is bindable: the overlay only uses it to close an open menu (src/runtime_input_config.c).
-ALWAYS_RESERVED = {'insert', 'f9'}
+ALWAYS_RESERVED = {'insert', 'f9', 'f11'}
 
 # Tk's event.keysym (X11/Tk names) -> our key name. Only keys with a different spelling are
 # listed; keysyms not in this table are tried lowercased as-is (covers a..z, 0..9, f1..f12).

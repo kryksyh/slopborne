@@ -94,6 +94,8 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Borderless fullscreen window (Display tab, Alt+Enter, F11). BB_FULLSCREEN overrides it at start.
+    std::atomic<bool> fullscreen{false};
     /// bbport: the Filters tab: 0 off, else BbFilters::All[retro_filter - 1]; knobs per filter.
     std::atomic<int> retro_filter{0};
     std::array<std::array<std::atomic<float>, BbFilters::MaxParams>, BbFilters::Count> filter_params{};
