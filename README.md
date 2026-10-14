@@ -1,9 +1,14 @@
-# Slopborne: Bloodborne for macOS and Windows
+# Slopborne
 
 Based on the [bbport](https://github.com/deadinside28/bloodborne_pc), which in turn is based on the [shadPS4](https://github.com/shadps4-emu/shadPS4).
 
 The original PlayStation 4 game runs via Rosetta2, its own x86-64 code uses AVX instructions, thus the minial osx version is 15, where AVX emulation is supported.
 
+<table align="center"><tr><td width="640">
+
+https://github.com/user-attachments/assets/9ca70d36-ce06-47a8-b1e5-cddbe5604ff3
+
+</td></tr></table>
 
 **[Download the latest version](https://github.com/kryksyh/slopborne/releases/latest)** ·
 
