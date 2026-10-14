@@ -46,10 +46,12 @@ cp launcher/bloodborne.ico launcher/bloodborne.png "$dest/launcher/"
 for exe in bb-probe.exe bb-gpu-capabilities.exe bb-controller-info.exe; do
     llvm-strip --strip-debug -o "$dest/bin/$exe" "out/$exe"
 done
-# Every DLL the executables load from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...).
+# Every DLL the executables load that the CLANG64 tree has (SDL3, FFmpeg, Vulkan loader, ...),
+# by name: Windows finds a copy in System32 first (OpenSSL from other software, the driver's
+# Vulkan loader), which this machine has but a player's may not.
 ldd "$dest/bin/bb-probe.exe" "$dest/bin/bb-gpu-capabilities.exe" "$dest/bin/bb-controller-info.exe" |
-    awk '/\/clang64\/bin\// {print $3}' | sort -u | while read -r dll; do
-        cp -u "$dll" "$dest/bin/"
+    awk '{print $1}' | sort -u | while read -r dll; do
+        if [[ -f /clang64/bin/$dll ]]; then cp -u "/clang64/bin/$dll" "$dest/bin/"; fi
     done
 cp -r scripts patches "$dest/"
 cp run.py LICENSE README.md packaging/windows/README-Windows.txt "$dest/"
