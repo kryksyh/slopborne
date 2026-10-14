@@ -94,6 +94,9 @@ struct Values {
     std::atomic<int> controller_layout{BbPrompts::Auto};
     // Frontend-only, protected by the overlay mutex after startup Load().
     std::string controller_device;
+    /// Online play through a shadNet server: read by the launcher at start (run.py).
+    std::atomic<bool> online{false};
+    std::string online_npid, online_password, online_server;
     BbPrompts::FaceMap controller_map = BbPrompts::Identity;
     int startup_controller_layout = BbPrompts::Auto;
     std::string startup_controller_device;
@@ -133,6 +136,8 @@ struct Values {
     bool startup_effects[EffectCount]{};
     int startup_model_lod = 0;
     int startup_frame_limit = 30;
+    bool startup_online = false;
+    std::string startup_online_npid, startup_online_password, startup_online_server;
     int startup_output_res = OutputDefault;
     int startup_render_res = RenderNative;
     int startup_live_resolution = 0;

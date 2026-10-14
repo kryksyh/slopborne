@@ -46,6 +46,24 @@ def summon_service(webapi):
         return False
 
 
+def menu_online(env, config):
+    """The in-game menu's Online settings (bbport.ini), unless the environment sets online play."""
+    if 'BB_ONLINE' in env or ini_value(config, 'online') != '1':
+        return
+    npid = (ini_value(config, 'online_npid') or '').strip()
+    if not npid:
+        print('Online: no shadNet account in the menu; playing offline')
+        return
+    server = (ini_value(config, 'online_server') or '').strip() or 'srv.shadps4.net:31313'
+    host = server.rsplit(':', 1)[0] if server.count(':') == 1 else server
+    env.update(BB_ONLINE='1', BB_SHADNET_SERVER=server, BB_SHADNET_NPID=npid,
+               BB_SHADNET_PASSWORD=ini_value(config, 'online_password') or '')
+    env.setdefault('BB_SHADNET_WEBAPI', f'http://{host}:31315')
+    env.setdefault('BB_UPNP', '1')
+    env.setdefault('BB_COMMUNITY_SERVER', COMMUNITY_SERVER)
+    print(f'Online: shadNet {server} as {npid}')
+
+
 def online_overrides(env, user_dir):
     """Writes user/host_overrides.json for this launch. A player who needs other addresses
     puts them in user/host_overrides.custom.json, which is then used as it is."""
@@ -304,6 +322,7 @@ def main():
         user_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('BB_GPU_USER_DIR', str(user_dir))
         install_pipeline_list(game, Path(env['BB_GPU_USER_DIR']), out, env)
+        menu_online(env, config)
         if env.get('BB_ONLINE') == '1':
             online_overrides(env, user_dir)
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]

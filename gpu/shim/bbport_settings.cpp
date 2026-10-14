@@ -78,6 +78,14 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.controller_layout = std::clamp(i, 0, int(BbPrompts::LayoutCount) - 1);
     } else if (key == "controller_device") {
         v.controller_device = value;
+    } else if (key == "online") {
+        v.online = i != 0;
+    } else if (key == "online_npid") {
+        v.online_npid = value;
+    } else if (key == "online_password") {
+        v.online_password = value;
+    } else if (key == "online_server") {
+        v.online_server = value;
     } else if (key == "controller_map") {
         v.controller_map = BbPrompts::ParseMap(value);
     } else if (key == "async_pipelines") {
@@ -221,6 +229,10 @@ void Load() {
     v.startup_live_resolution = v.live_resolution;
     v.startup_controller_layout = v.controller_layout;
     v.startup_controller_device = v.controller_device;
+    v.startup_online = v.online;
+    v.startup_online_npid = v.online_npid;
+    v.startup_online_password = v.online_password;
+    v.startup_online_server = v.online_server;
     v.startup_controller_map = v.controller_map;
 }
 
@@ -342,6 +354,10 @@ void Save() {
         }
     }
     std::fprintf(file, "frame_limit=%d\n", v.frame_limit.load());
+    // Read by run.py at start (BB_ONLINE, BB_SHADNET_*).
+    std::fprintf(file, "online=%d\nonline_npid=%s\nonline_password=%s\nonline_server=%s\n",
+                 int(v.online.load()), v.online_npid.c_str(), v.online_password.c_str(),
+                 v.online_server.c_str());
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nrender_res=%dx%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res],
                  RenderWidths[v.render_res], RenderHeights[v.render_res]);

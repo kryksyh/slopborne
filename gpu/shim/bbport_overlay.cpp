@@ -280,6 +280,28 @@ void EffectOptions(EffectPage page) {
     }
 }
 
+// Online play: a shadNet account the launcher passes to the game at start.
+void OnlineOptions() {
+    auto& s = BbSettings::Get();
+    ImGui::SeparatorText(T("Online (requires restart)"));
+    Checkbox(T("Play online"), s.online);
+    const auto field = [](const char* label, std::string& value, ImGuiInputTextFlags flags,
+                          const char* hint) {
+        char buffer[128];
+        std::snprintf(buffer, sizeof(buffer), "%s", value.c_str());
+        if (ImGui::InputTextWithHint(label, hint, buffer, sizeof(buffer), flags)) {
+            value = buffer;
+            dirty = true;
+        }
+    };
+    ImGui::BeginDisabled(!s.online);
+    field(T("shadNet account"), s.online_npid, 0, "");
+    field(T("Password"), s.online_password, ImGuiInputTextFlags_Password, "");
+    field(T("Server"), s.online_server, 0, "srv.shadps4.net:31313");
+    ImGui::EndDisabled();
+    Hint(T("Free account: shadnet.shadps4.net"));
+}
+
 // A greyed-out line under a control that is unavailable, saying why.
 void Because(const char* reason) {
     ImGui::Indent();
@@ -696,6 +718,9 @@ bool NeedsRestart() {
                    s.object_motion != s.startup_object_motion ||
                    s.model_lod != s.startup_model_lod ||
                    s.frame_limit != s.startup_frame_limit ||
+                   s.online != s.startup_online || s.online_npid != s.startup_online_npid ||
+                   s.online_password != s.startup_online_password ||
+                   s.online_server != s.startup_online_server ||
                    s.live_resolution != s.startup_live_resolution ||
                    s.async_pipelines != s.startup_async_pipelines ||
                    BbSettings::ResolutionNeedsRestart() ||
@@ -752,6 +777,7 @@ void Menu() {
                     EffectOptions(EffectPage::Gameplay);
                     ImGui::Spacing();
                     if (ImGui::CollapsingHeader(T("Cheats (requires restart)"))) EffectOptions(EffectPage::Cheats);
+                    OnlineOptions();
                 }
                 if (i == PageAdvanced) AdvancedMenu();
                 ImGui::PopItemWidth();
