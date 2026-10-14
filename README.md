@@ -63,7 +63,7 @@ Original features of the [Bloodborne for Windows](https://github.com/Supermedo/b
 - **macOS support** (Apple Silicon; Intel Macs untested)
 - **MetalFX upscaling** on Apple GPUs (M1, M2, M3, etc.) with temporal and spatial modes.
 - Bilenear and nearest-neighbor upscaling
-- **FSR1** spatial upscaling on macOS and Windows (Windows untested), for older AMD and Intel GPUs.
+- **FSR1** spatial upscaling on macOS and Windows, for older AMD and Intel GPUs.
 - Quite a few performance optimizations, the game runs at more or less stable 1080@30 FPS on M3 mac
 - Async shader compilation, which reduces stutter and produces weird artifcats you would love
 - Reworked menus to make them more readable and usable
@@ -149,7 +149,6 @@ put its address in **Server address**.
 - Async shader compilation will draw a few frames of stand-in textures when the shader is used for the first time, don't be scared, at least it doesn't stutter. If you want this can be disabled in menus
 - MetalFX is used only with a reduced scene size: at full size it crashed inside Apple's
   frameworks, so FSR 3.1 takes over there.
-- The Windows build of this branch is untested: it has not been built since the macOS work began.
 
 ## Problems and feedback
 
