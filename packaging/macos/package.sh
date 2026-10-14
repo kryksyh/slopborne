@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Builds Bloodborne.app and a zip for players: the front end (packaging/macos/app, frozen with
+# Builds Slopborne.app and a zip for players: the front end (packaging/macos/app, frozen with
 # PyInstaller so players need no Python), bb-probe with every non-system library it uses,
 # run.py with the preparation scripts and patches, and default settings. No game files.
 # Each run writes a new out/macos/package-<time>/; earlier packages are kept.
@@ -34,13 +34,13 @@ if [[ ! -x out/macos/pyenv/bin/python ]]; then
 fi
 
 # Icon from the launcher's PNG.
-iconset=$stage/Bloodborne.iconset
+iconset=$stage/Slopborne.iconset
 mkdir -p "$iconset"
 for size in 16 32 64 128 256 512; do
     sips -z $size $size launcher/bloodborne.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
     sips -z $((size * 2)) $((size * 2)) launcher/bloodborne.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil -c icns "$iconset" -o "$stage/Bloodborne.icns"
+iconutil -c icns "$iconset" -o "$stage/Slopborne.icns"
 
 # The preparation scripts run inside the frozen executable (--script): their standard modules.
 hidden=()
@@ -55,11 +55,11 @@ entitlements=$PWD/packaging/macos/entitlements.plist
 signing=()
 [[ -n $identity ]] && signing=(--codesign-identity "$identity" --osx-entitlements-file "$entitlements")
 out/macos/pyenv/bin/python -m PyInstaller --noconfirm --log-level WARN --windowed --argv-emulation \
-    --name Bloodborne --icon "$stage/Bloodborne.icns" --osx-bundle-identifier io.github.bbport.bloodborne \
+    --name Slopborne --icon "$stage/Slopborne.icns" --osx-bundle-identifier io.github.bbport.bloodborne \
     --distpath "$stage/dist" --workpath "$stage/work" --specpath "$stage/work" "${signing[@]}" \
     --paths "$PWD/scripts" "${hidden[@]}" "$PWD/packaging/macos/app/bloodborne_mac.py"
-app=$stage/Bloodborne.app
-mv "$stage/dist/Bloodborne.app" "$app"
+app=$stage/Slopborne.app
+mv "$stage/dist/Slopborne.app" "$app"
 
 contents=$app/Contents
 mkdir -p "$contents/Resources/port/scripts" "$contents/Resources/port/patches"
@@ -93,7 +93,7 @@ python3 packaging/macos/bundle_dylibs.py "$app" "${executables[@]}"
 plist=$contents/Info.plist
 set_plist() { /usr/libexec/PlistBuddy -c "Delete :$1" "$plist" 2>/dev/null || true
               /usr/libexec/PlistBuddy -c "Add :$1 $2 $3" "$plist"; }
-set_plist CFBundleDisplayName string Bloodborne
+set_plist CFBundleDisplayName string Slopborne
 set_plist CFBundleShortVersionString string "$version"
 set_plist LSMinimumSystemVersion string 15.0
 set_plist LSApplicationCategoryType string public.app-category.role-playing-games
@@ -115,9 +115,9 @@ else
 fi
 codesign --verify --deep --strict "$app"
 
-folder=$stage/Bloodborne-macOS
+folder=$stage/Slopborne-macOS
 mkdir -p "$folder"
-ditto "$app" "$folder/Bloodborne.app"
+ditto "$app" "$folder/Slopborne.app"
 cp packaging/macos/README-macOS.txt "$folder/"
 # Licenses: the port's, the retro filter shaders', and those of the bundled and compiled-in code.
 licenses=$folder/licenses
@@ -145,5 +145,5 @@ for license in out/macos/prefix/share/licenses/*/LICENSE*; do
     [[ -f $licenses/$name-LICENSE.txt ]] || cp "$license" "$licenses/$name-LICENSE.txt"
 done
 # No resource forks or extended attributes: they show up as ._ files in the zip.
-(cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Bloodborne-macOS "Bloodborne-macOS-$version.zip")
-echo "Package: $stage/Bloodborne-macOS-$version.zip"
+(cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Slopborne-macOS "Slopborne-macOS-$version.zip")
+echo "Package: $stage/Slopborne-macOS-$version.zip"

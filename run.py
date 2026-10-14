@@ -139,7 +139,7 @@ def no_console():
 
 
 def run_script(name, *args, capture=False, optional=False):
-    # Inside the packaged Bloodborne.exe (PyInstaller) the executable runs scripts itself.
+    # Inside the packaged Slopborne.exe (PyInstaller) the executable runs scripts itself.
     script = ['--script'] if getattr(sys, 'frozen', False) else []
     command = [sys.executable, *script, str(PORT / 'scripts' / name), *map(str, args)]
     if capture:
@@ -150,7 +150,7 @@ def run_script(name, *args, capture=False, optional=False):
                 raise subprocess.CalledProcessError(result.returncode, command)
             sys.exit(result.returncode)
         return result.stdout
-    # stdin given: the output handles are passed explicitly (a windowed Bloodborne.exe child would
+    # stdin given: the output handles are passed explicitly (a windowed Slopborne.exe child would
     # get none otherwise).
     result = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console())
     if result.returncode:

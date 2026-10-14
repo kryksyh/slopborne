@@ -1,9 +1,9 @@
 // bbport: Russian text of the in-game menu, keyed by its English text (bbport_overlay.cpp T()).
 // Generated from the original Russian menu; keep in sync when menu text changes.
-{"Bloodborne settings  (Insert / L3+R3)",
- "Bloodborne — настройки  (Insert / L3+R3)"},
-{"Bloodborne settings  (Cmd+, / L3+R3)",
- "Bloodborne — настройки  (Cmd+, / L3+R3)"},
+{"Slopborne settings  (Insert / L3+R3)",
+ "Slopborne — настройки  (Insert / L3+R3)"},
+{"Slopborne settings  (Cmd+, / L3+R3)",
+ "Slopborne — настройки  (Cmd+, / L3+R3)"},
 {"Temporal upscaler",
  "Временной апскейлер"},
 {"Off",

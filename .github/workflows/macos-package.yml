@@ -75,7 +75,7 @@ jobs:
         run: |
           echo "$KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
           auth=(--key "$RUNNER_TEMP/notary.p8" --key-id "$KEY_ID" --issuer "$ISSUER")
-          zip=$(ls out/macos/package-*/Bloodborne-macOS-*.zip)
+          zip=$(ls out/macos/package-*/Slopborne-macOS-*.zip)
           result=$(xcrun notarytool submit "$zip" "${auth[@]}" --wait --timeout 60m --output-format json)
           echo "$result"
           id=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
@@ -83,10 +83,10 @@ jobs:
           if [ "$status" != Accepted ]; then xcrun notarytool log "$id" "${auth[@]}"; exit 1; fi
           # The ticket goes into the app, then the zip is made again from the stapled app.
           stage=$(dirname "$zip")
-          xcrun stapler staple "$stage/Bloodborne-macOS/Bloodborne.app"
+          xcrun stapler staple "$stage/Slopborne-macOS/Slopborne.app"
           mkdir -p dist
-          (cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Bloodborne-macOS "$GITHUB_WORKSPACE/dist/$(basename "$zip")")
-          spctl --assess --type execute --verbose "$stage/Bloodborne-macOS/Bloodborne.app"
+          (cd "$stage" && ditto -c -k --norsrc --noextattr --keepParent Slopborne-macOS "$GITHUB_WORKSPACE/dist/$(basename "$zip")")
+          spctl --assess --type execute --verbose "$stage/Slopborne-macOS/Slopborne.app"
 
       - name: Checksums
         run: |

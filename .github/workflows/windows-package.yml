@@ -1,4 +1,4 @@
-# Builds dist/bbport-windows.zip on a Windows runner, the same steps as packaging/windows/README.md:
+# Builds dist/Slopborne-Windows.zip on a Windows runner, the same steps as packaging/windows/README.md:
 # build.sh, build_dlss.sh (MSVC + NVIDIA's public DLSS SDK) and package.sh in an MSYS2 CLANG64 shell.
 # The zip is uploaded as an artifact (from 0xCydral/bloodborne_pc, adapted).
 name: windows-package
@@ -63,12 +63,12 @@ jobs:
         run: |
           bash tools/fetch_fsr4_assets.sh
           WINPYTHON="$(cygpath -u "$pythonLocation")/python.exe" bash packaging/windows/package.sh
-          sha256sum dist/bbport-windows.zip | tee dist/bbport-windows.zip.sha256
+          sha256sum dist/Slopborne-Windows.zip | tee dist/Slopborne-Windows.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
           name: slopborne-windows
           path: |
-            dist/bbport-windows.zip
-            dist/bbport-windows.zip.sha256
+            dist/Slopborne-Windows.zip
+            dist/Slopborne-Windows.zip.sha256
           compression-level: 0

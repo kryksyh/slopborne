@@ -12,13 +12,13 @@ Requirements
   Nothing else: Python and the libraries are inside this folder.
 
 Starting
-- Bloodborne.exe opens the launcher. On "Game & effects" pick your game folder, adjust the
+- Slopborne.exe opens the launcher. On "Game & effects" pick your game folder, adjust the
   settings, press PLAY. The "Play" page checks the game version, saves, graphics card and
   FSR 4 assets.
-- Play Bloodborne.exe starts the game straight away with the settings saved in the launcher,
-  without opening it. Set things up once in Bloodborne.exe, then use Play Bloodborne.exe (or a
+- Play Slopborne.exe starts the game straight away with the settings saved in the launcher,
+  without opening it. Set things up once in Slopborne.exe, then use Play Slopborne.exe (or a
   shortcut to it, or "Add to Steam" on the Play page). If no game folder is chosen
-  yet it opens the launcher. Bloodborne.exe --play does the same. The log goes to
+  yet it opens the launcher. Slopborne.exe --play does the same. The log goes to
   user\last_run.log.
 - Advanced -> "Desktop shortcut" puts Bloodborne on the desktop.
 - Updates: when a new version is out, the launcher shows it at the bottom left; "Update"
@@ -34,8 +34,8 @@ Starting
   Q Triangle, 1/3 L1/R1, R/F L2/R2, Z/C L3/R3, I/K/J/L d-pad, Enter Options, Tab touchpad.
 
 Data
-- Saves and shader caches: user\ next to Bloodborne.exe (the launcher can pick another folder).
-- Settings: bbport.ini next to Bloodborne.exe; launcher options in %APPDATA%\bbport-launcher.
+- Saves and shader caches: user\ next to Slopborne.exe (the launcher can pick another folder).
+- Settings: bbport.ini next to Slopborne.exe; launcher options in %APPDATA%\bbport-launcher.
 - Generated files (prepared game image, patches): out\.
 
 Online play (beta)

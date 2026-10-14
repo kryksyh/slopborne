@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Bloodborne launcher for Windows (Tkinter; launcher/bbport_launcher.py is the Linux one).
+"""Slopborne launcher for Windows (Tkinter; launcher/bbport_launcher.py is the Linux one).
 
 Every setting of the port in one window: the game folder and saves, bbport.ini (upscaler,
 preset, output, effects), start-up options passed to run.py as environment variables
 (frame rate, presentation, HDR, ...), mods, third-party patches and the FSR 4 assets.
 Launcher options live in %APPDATA%/bbport-launcher/settings.json.
 
-Frozen with PyInstaller (packaging/windows/package.sh) the same Bloodborne.exe also runs the
+Frozen with PyInstaller (packaging/windows/package.sh) the same Slopborne.exe also runs the
 game without the window (`--play`), run.py (`--run`) and the preparation scripts (`--script`),
 so a packaged port needs no Python installation.
 """
@@ -420,7 +420,7 @@ class Launcher:
         self.banner_source = self.banner_image = None
         self.ui_calls = queue.Queue()  # work for the Tk thread from helper threads
         self.mod_order, self.mod_vars, self.patch_vars = [], {}, {}
-        root.title('Bloodborne — bbport')
+        root.title('Slopborne')
         root.configure(bg=BG)
         self.dpi = root.winfo_fpixels('1i') / 96.0
         root.geometry(f'{self.px(1120)}x{self.px(740)}')
@@ -766,7 +766,7 @@ class Launcher:
                                                        'Выберите папку игры («Игра и эффекты»)'),
                           fill=MUTED, font=('Segoe UI', 11))
         if not self.banner_image:
-            c.create_text(30, h - 70, text='Bloodborne', anchor='w', fill='#f2ead9', font=('Georgia', 36))
+            c.create_text(30, h - 70, text='Slopborne', anchor='w', fill='#f2ead9', font=('Georgia', 36))
         info = game_info(self.var('game_dir', 'app').get())
         sub = (_('CUSA03173 · game version {}', 'CUSA03173 · версия игры {}').format(info[1]) if info
                else _('Game folder not set', 'Папка игры не выбрана'))
@@ -1468,20 +1468,20 @@ class Launcher:
         online, npid = self.var('online', 'app'), self.var('online_npid', 'app')
         if not online.get() and npid.get().strip():
             choice = self.messagebox.askyesnocancel(
-                'Bloodborne', _('An online account is filled in, but "Play online" is off.\n\n'
+                'Slopborne', _('An online account is filled in, but "Play online" is off.\n\n'
                                 'Yes: play online.   No: play offline.'))
             if choice is None:
                 return
             online.set(bool(choice))
         if online.get() and '@' in npid.get():
             self.messagebox.showwarning(
-                'Bloodborne', _('The Online ID is the account name (NPID) you registered on the server, '
+                'Slopborne', _('The Online ID is the account name (NPID) you registered on the server, '
                                 'not your email address.'))
             self.show('online')
             return
         self.collect()
         if not game_info(self.app['game_dir']):
-            self.messagebox.showerror('Bloodborne', _('Choose the game folder with eboot.bin (CUSA03173).',
+            self.messagebox.showerror('Slopborne', _('Choose the game folder with eboot.bin (CUSA03173).',
                                                       'Выберите папку игры с eboot.bin (CUSA03173).'))
             self.show('game')
             return
@@ -1589,14 +1589,14 @@ class Launcher:
         except (OSError, ValueError, KeyError) as failure:
             if manual:
                 self.ui_calls.put(lambda error=failure: self.messagebox.showerror(
-                    'Bloodborne', _('Could not check for updates: {}', 'Не удалось проверить обновления: {}').format(error)))
+                    'Slopborne', _('Could not check for updates: {}', 'Не удалось проверить обновления: {}').format(error)))
             return
 
         def show():
             if version_tuple(version) > version_tuple(VERSION):
                 self.offer_update(version, url, page)
             elif manual:
-                self.messagebox.showinfo('Bloodborne', _('You have the latest version ({}).',
+                self.messagebox.showinfo('Slopborne', _('You have the latest version ({}).',
                                                          'У вас последняя версия ({}).').format(VERSION))
         self.ui_calls.put(show)
 
@@ -1623,12 +1623,12 @@ class Launcher:
 
     def install_update(self, version, url, page):
         if self.process:
-            self.messagebox.showinfo('Bloodborne', _('Close the game before updating.', 'Закройте игру перед обновлением.'))
+            self.messagebox.showinfo('Slopborne', _('Close the game before updating.', 'Закройте игру перед обновлением.'))
             return
         if not FROZEN or not url:  # a source tree updates with git
             webbrowser.open(page)
             return
-        if not self.messagebox.askyesno('Bloodborne', _(
+        if not self.messagebox.askyesno('Slopborne', _(
                 'Install version {} now? The launcher closes, installs it and opens again. Saves and settings are kept.',
                 'Установить версию {} сейчас? Лаунчер закроется, установит её и откроется снова. Сохранения и '
                 'настройки останутся.').format(version)):
@@ -1657,18 +1657,18 @@ class Launcher:
                 with zipfile.ZipFile(archive) as package:
                     package.extractall(UPDATE_DIR / 'new')
                 archive.unlink()
-                new = next((p.parent for p in (UPDATE_DIR / 'new').rglob('Bloodborne.exe')), None)
+                new = next((p.parent for p in (UPDATE_DIR / 'new').rglob('Slopborne.exe')), None)
                 if not new:
-                    raise OSError('Bloodborne.exe is missing from the download')
+                    raise OSError('Slopborne.exe is missing from the download')
                 # The new launcher copies itself over this installation once this one has closed.
-                subprocess.Popen([str(new / 'Bloodborne.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
+                subprocess.Popen([str(new / 'Slopborne.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
                                  cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
                 self.ui_calls.put(self.root.destroy)
             except (OSError, zipfile.BadZipFile) as failure:
                 def failed(error=failure):
                     self.update_button.configure(state='normal')
                     self.update_label.configure(text=_('Version {} is available.', 'Доступна версия {}.').format(version))
-                    self.messagebox.showerror('Bloodborne', _('Update failed: {}', 'Не удалось обновить: {}').format(error))
+                    self.messagebox.showerror('Slopborne', _('Update failed: {}', 'Не удалось обновить: {}').format(error))
                 self.ui_calls.put(failed)
         threading.Thread(target=work, daemon=True).start()
 
@@ -1679,12 +1679,12 @@ class Launcher:
         import shutil
         cache = Path(self.app['user_dir'] or DATA_DIR / 'user') / 'cache'
         shutil.rmtree(cache, ignore_errors=True)
-        self.messagebox.showinfo('Bloodborne', _('Shader cache cleared. The next start stutters for a few minutes while '
+        self.messagebox.showinfo('Slopborne', _('Shader cache cleared. The next start stutters for a few minutes while '
                                                  'it is rebuilt.', 'Кэш шейдеров очищен. Следующий запуск несколько '
                                                  'минут будет подтормаживать, пока кэш собирается заново.'))
 
     def shortcut(self):
-        """Bloodborne.lnk on the desktop."""
+        """Slopborne.lnk on the desktop."""
         if FROZEN:
             target, arguments, icon = sys.executable, '', f'{sys.executable},0'
         else:  # a source tree: the launcher script with the windowless Python
@@ -1692,33 +1692,33 @@ class Launcher:
             target = str(pythonw if pythonw.exists() else sys.executable)
             arguments, icon = Path(__file__).resolve(), PORT_DIR / 'launcher' / 'bloodborne.ico'
         script = ('$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath("Desktop")'
-                  '+"\\Bloodborne.lnk");'
+                  '+"\\Slopborne.lnk");'
                   f'$s.TargetPath="{target}";$s.WorkingDirectory="{PORT_DIR}";$s.IconLocation="{icon}";'
                   + (f"$s.Arguments='\"{arguments}\"';" if arguments else '') + '$s.Save()')
         result = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True,
                                 creationflags=NO_WINDOW)
         if result.returncode == 0:
-            self.messagebox.showinfo('Bloodborne', _('Shortcut created on the desktop.', 'Ярлык создан на рабочем столе.'))
+            self.messagebox.showinfo('Slopborne', _('Shortcut created on the desktop.', 'Ярлык создан на рабочем столе.'))
         else:
-            self.messagebox.showerror('Bloodborne', result.stderr.decode(errors='replace')[:400])
+            self.messagebox.showerror('Slopborne', result.stderr.decode(errors='replace')[:400])
 
     def add_to_steam(self):
-        """Bloodborne in the Steam library (a non-Steam game that starts Play Bloodborne.exe)."""
+        """Slopborne in the Steam library (a non-Steam game that starts Play Slopborne.exe)."""
         import bbport_steam
         steam = bbport_steam.steam_folder()
         configs = bbport_steam.user_configs(steam) if steam else []
         if not configs:
-            self.messagebox.showerror('Bloodborne', _('Steam was not found on this PC (or nobody has signed in to it yet).'))
+            self.messagebox.showerror('Slopborne', _('Steam was not found on this PC (or nobody has signed in to it yet).'))
             return
         if FROZEN:
-            exe, options = PORT_DIR / 'Play Bloodborne.exe', ''
+            exe, options = PORT_DIR / 'Play Slopborne.exe', ''
         else:
             pythonw = Path(sys.executable).with_name('pythonw.exe')
             exe, options = (pythonw if pythonw.exists() else Path(sys.executable)), f'"{Path(__file__).resolve()}" --play'
-        self.collect()  # Play Bloodborne.exe starts the game with the saved settings
+        self.collect()  # Play Slopborne.exe starts the game with the saved settings
         restart = False
         if bbport_steam.steam_running():
-            if not self.messagebox.askyesno('Bloodborne', _('Steam has to close while the game is added; it starts '
+            if not self.messagebox.askyesno('Slopborne', _('Steam has to close while the game is added; it starts '
                                                             'again afterwards. Close Steam now?')):
                 return
             subprocess.Popen([str(steam / 'steam.exe'), '-shutdown'], creationflags=NO_WINDOW)
@@ -1727,20 +1727,20 @@ class Launcher:
                 if not bbport_steam.steam_running():
                     break
             else:
-                self.messagebox.showerror('Bloodborne', _('Steam did not close. Close it yourself and try again.'))
+                self.messagebox.showerror('Slopborne', _('Steam did not close. Close it yourself and try again.'))
                 return
             time.sleep(1)  # Steam writes its files as it exits
             restart = True
         try:
             for config in configs:
-                bbport_steam.add_shortcut(config / 'shortcuts.vdf', 'Bloodborne', str(exe), str(PORT_DIR),
+                bbport_steam.add_shortcut(config / 'shortcuts.vdf', 'Slopborne', str(exe), str(PORT_DIR),
                                           str(exe), options)
         except (OSError, ValueError) as error:
-            self.messagebox.showerror('Bloodborne', _('Could not add the game to Steam: {}').format(error))
+            self.messagebox.showerror('Slopborne', _('Could not add the game to Steam: {}').format(error))
             return
         if restart:
             os.startfile('steam://open/games')
-        self.messagebox.showinfo('Bloodborne', _('Bloodborne is in your Steam library. It starts with the settings '
+        self.messagebox.showinfo('Slopborne', _('Slopborne is in your Steam library. It starts with the settings '
                                                  'saved in this launcher.'))
 
     def close(self):
@@ -1829,10 +1829,10 @@ def install_update(target, wait_pid):
     else:
         ctypes.windll.user32.MessageBoxW(None, _(
             'Could not install the update. Download it from the releases page.',
-            'Не удалось установить обновление. Скачайте его со страницы релизов.'), 'Bloodborne', 0x10)
+            'Не удалось установить обновление. Скачайте его со страницы релизов.'), 'Slopborne', 0x10)
         webbrowser.open(RELEASES_PAGE)
         return 1
-    subprocess.Popen([str(target / 'Bloodborne.exe')], cwd=str(target))
+    subprocess.Popen([str(target / 'Slopborne.exe')], cwd=str(target))
     return 0
 
 

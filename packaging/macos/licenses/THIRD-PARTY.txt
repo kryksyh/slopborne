@@ -1,6 +1,6 @@
-Third-party components in Bloodborne.app (macOS)
+Third-party components in Slopborne.app (macOS)
 
-Bundled libraries (Bloodborne.app/Contents/Frameworks):
+Bundled libraries (Slopborne.app/Contents/Frameworks):
 - MoltenVK (Khronos Group), Apache-2.0: https://github.com/KhronosGroup/MoltenVK
 - SDL3, zlib license: https://github.com/libsdl-org/SDL
 - FFmpeg (libavcodec, libavformat, libavutil, libswresample, libswscale), LGPL-2.1-or-later:

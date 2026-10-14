@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Bloodborne.app: finds the game folder (asked once), keeps saves and settings in
+"""Slopborne.app: finds the game folder (asked once), keeps saves and settings in
 ~/Library/Application Support/Bloodborne, backs up saves, then starts the game through run.py.
 
 Frozen with PyInstaller (packaging/macos/package.sh): `--run` runs run.py and `--script <file>`
@@ -47,9 +47,9 @@ RU = {
     'runs at its original 30 FPS settings.':
         'Версия игры {version}: патчи частоты кадров и эффектов требуют версию 01.09, игра '
         'запустится с исходными настройками 30 FPS.',
-    'Bloodborne needs Rosetta to run on this Mac. Install it now? (Administrator password needed.)':
-        'Для Bloodborne на этом Mac нужна Rosetta. Установить сейчас? (Нужен пароль администратора.)',
-    'Only {free:.1f} GB of memory is free. Bloodborne needs about 8 GB for smooth play: close other '
+    'Slopborne needs Rosetta to run on this Mac. Install it now? (Administrator password needed.)':
+        'Для Slopborne на этом Mac нужна Rosetta. Установить сейчас? (Нужен пароль администратора.)',
+    'Only {free:.1f} GB of memory is free. Slopborne needs about 8 GB for smooth play: close other '
     'apps (browsers, virtual machines, editors) to avoid stutter.':
         'Свободно только {free:.1f} ГБ памяти. Для плавной игры нужно около 8 ГБ: закройте другие '
         'программы (браузеры, виртуальные машины, редакторы), чтобы не было рывков.',
@@ -58,10 +58,10 @@ RU = {
     'No Bloodborne save (an SPRJ0005 folder with userdata files) was found in {path}.':
         'В {path} не найдено сохранение Bloodborne (папка SPRJ0005 с файлами userdata).',
     'Save imported.': 'Сохранение импортировано.',
-    'Bloodborne closed unexpectedly (code {code}). Save a crash report to your Desktop?':
-        'Bloodborne неожиданно закрылась (код {code}). Сохранить отчёт об ошибке на рабочий стол?',
+    'Slopborne closed unexpectedly (code {code}). Save a crash report to your Desktop?':
+        'Slopborne неожиданно закрылась (код {code}). Сохранить отчёт об ошибке на рабочий стол?',
     'Crash report saved: {path}': 'Отчёт сохранён: {path}',
-    'Bloodborne is already running.': 'Bloodborne уже запущена.',
+    'Slopborne is already running.': 'Slopborne уже запущена.',
     'Continue': 'Продолжить', 'Quit': 'Выйти', 'Install': 'Установить', 'Import': 'Импортировать',
     'Cancel': 'Отмена', 'Save report': 'Сохранить отчёт', 'Close': 'Закрыть', 'OK': 'OK',
 }
@@ -94,7 +94,7 @@ def applescript_text(text):
 def dialog(message, buttons=('OK',), default=None, caution=False):
     """A native alert; returns the pressed button's English text (None when dismissed)."""
     labels = [tr(b) for b in buttons]
-    script = (f'display dialog {applescript_text(message)} with title "Bloodborne" '
+    script = (f'display dialog {applescript_text(message)} with title "Slopborne" '
               f'buttons {{{", ".join(map(applescript_text, labels))}}} '
               f'default button {applescript_text(tr(default or buttons[-1]))}'
               f'{" with icon caution" if caution else ""}')
@@ -158,7 +158,7 @@ def rosetta_ready():
         return True
     if subprocess.run(['/usr/bin/arch', '-x86_64', '/usr/bin/true'], capture_output=True).returncode == 0:
         return True
-    if dialog(tr('Bloodborne needs Rosetta to run on this Mac. Install it now? (Administrator '
+    if dialog(tr('Slopborne needs Rosetta to run on this Mac. Install it now? (Administrator '
                  'password needed.)'), buttons=('Quit', 'Install')) != 'Install':
         return False
     script = ('do shell script "/usr/sbin/softwareupdate --install-rosetta --agree-to-license" '
@@ -188,7 +188,7 @@ def memory_ok():
     free = free_memory_gb()
     if free is None or free >= 8:
         return True
-    return dialog(tr('Only {free:.1f} GB of memory is free. Bloodborne needs about 8 GB for smooth '
+    return dialog(tr('Only {free:.1f} GB of memory is free. Slopborne needs about 8 GB for smooth '
                      'play: close other apps (browsers, virtual machines, editors) to avoid '
                      'stutter.', free=free), buttons=('Quit', 'Continue'), caution=True) == 'Continue'
 
@@ -239,11 +239,11 @@ def import_save(path, game):
 
 
 def crash_report(code):
-    if dialog(tr('Bloodborne closed unexpectedly (code {code}). Save a crash report to your Desktop?',
+    if dialog(tr('Slopborne closed unexpectedly (code {code}). Save a crash report to your Desktop?',
                  code=code), buttons=('Close', 'Save report'), caution=True) != 'Save report':
         return
     stamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    path = Path.home() / 'Desktop' / f'Bloodborne-crash-{stamp}.zip'
+    path = Path.home() / 'Desktop' / f'Slopborne-crash-{stamp}.zip'
     system = []
     for command in (['sw_vers'], ['sysctl', '-n', 'machdep.cpu.brand_string', 'hw.memsize'], ['vm_stat']):
         system.append(subprocess.run(command, capture_output=True, text=True).stdout)
@@ -316,7 +316,7 @@ def main():
     if args and args[0] in ('--run', '--script'):
         sys.exit(run_role(args))
     if subprocess.run(['pgrep', '-x', 'bb-probe'], capture_output=True).returncode == 0:
-        dialog(tr('Bloodborne is already running.'))
+        dialog(tr('Slopborne is already running.'))
         return 1
     if not rosetta_ready():
         return 1

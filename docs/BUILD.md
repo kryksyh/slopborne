@@ -10,7 +10,7 @@ the linked libraries for x86-64 into `out/macos/prefix` and fetches MoltenVK's u
 brew install cmake ninja pkgconf python@3.13 boost vulkan-headers glslang spirv-tools robin-map nlohmann-json
 git submodule update --init --recursive
 bash packaging/macos/build.sh --bootstrap --performance   # SDL, FFmpeg, OpenSSL, fmt, Zydis, ... then the game
-bash packaging/macos/package.sh                          # out/macos/package-*/Bloodborne-macOS-*.zip
+bash packaging/macos/package.sh                          # out/macos/package-*/Slopborne-macOS-*.zip
 ```
 
 Later builds skip `--bootstrap`. `--test` adds the regression tests. Details, options and

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Bloodborne launcher for the native port (GTK4 / libadwaita).
+"""Slopborne launcher for the native port (GTK4 / libadwaita).
 
 Picks the game folder, edits the port's settings (bbport.ini: upscaler, preset, ...) and the
 start-up tweaks passed as environment variables to run.sh, starts and stops the game and shows
@@ -247,7 +247,7 @@ class FolderList:
 
 class LauncherWindow(Adw.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="Bloodborne")
+        super().__init__(application=app, title="Slopborne")
         self.set_default_size(760, 820)
         self.settings = load_settings()
         set_language(self.settings.get("ui_language", ""))

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds dist/bbport-windows/ (and dist/bbport-windows.zip): Bloodborne.exe (the launcher, frozen
+# Builds dist/Slopborne-Windows/ (and dist/Slopborne-Windows.zip): Slopborne.exe (the launcher, frozen
 # with PyInstaller so players need no Python), bb-probe.exe with the MSYS2 CLANG64 DLLs it needs,
 # the preparation scripts and run.py. Run from an MSYS2 CLANG64 shell after `bash build.sh`.
 # Freezing uses a Windows Python 3.10+ (python.org; WINPYTHON overrides) and a private venv in
@@ -23,24 +23,24 @@ if [[ ! -x out/pyenv/Scripts/python.exe ]]; then
     "$python" -m venv out/pyenv
 fi
 out/pyenv/Scripts/python.exe -m pip install -q --disable-pip-version-check pyinstaller
-# The scripts run inside Bloodborne.exe (--script): the standard modules they import come along.
+# The scripts run inside Slopborne.exe (--script): the standard modules they import come along.
 hidden=()
 for module in argparse base64 collections hashlib json re shutil struct tempfile xml.etree.ElementTree \
               urllib.request ctypes.wintypes; do
     hidden+=(--hidden-import "$module")
 done
 out/pyenv/Scripts/python.exe -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
-    --name Bloodborne --icon "$(cygpath -w "$PWD/launcher/bloodborne.ico")" --distpath out/pyi-dist \
+    --name Slopborne --icon "$(cygpath -w "$PWD/launcher/bloodborne.ico")" --distpath out/pyi-dist \
     --workpath out/pyi-work --specpath out/pyi-work --paths "$(cygpath -w "$PWD/scripts")" "${hidden[@]}" \
     "$(cygpath -w "$PWD/launcher/bbport_launcher_win.py")"
 
-# The package is assembled in a fresh staging folder and zipped from there; dist/bbport-windows
+# The package is assembled in a fresh staging folder and zipped from there; dist/Slopborne-Windows
 # (a playable copy that may hold saves and settings) is only refreshed afterwards.
-dest=out/stage/bbport-windows
+dest=out/stage/Slopborne-Windows
 rm -rf -- out/stage
 mkdir -p "$dest/bin" "$dest/launcher"
-cp -r out/pyi-dist/Bloodborne/. "$dest/"
-llvm-strip -o "$dest/Play Bloodborne.exe" out/bb-play.exe
+cp -r out/pyi-dist/Slopborne/. "$dest/"
+llvm-strip -o "$dest/Play Slopborne.exe" out/bb-play.exe
 cp launcher/bloodborne.ico launcher/bloodborne.png "$dest/launcher/"
 # The executables without debug information (out/ keeps the symbols for crash reports).
 for exe in bb-probe.exe bb-gpu-capabilities.exe bb-controller-info.exe; do
@@ -76,21 +76,21 @@ for package in protobuf abseil-cpp openssl miniupnpc zlib; do
 done
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 mkdir -p dist
-rm -f dist/bbport-windows.zip
+rm -f dist/Slopborne-Windows.zip
 (cd out/stage && powershell -NoProfile -Command \
-    "Compress-Archive -Path bbport-windows -DestinationPath ../../dist/bbport-windows.zip")
+    "Compress-Archive -Path Slopborne-Windows -DestinationPath ../../dist/Slopborne-Windows.zip")
 
-# Refresh dist/bbport-windows, keeping what players create there (saves, settings, mods), and
+# Refresh dist/Slopborne-Windows, keeping what players create there (saves, settings, mods), and
 # only while nothing runs from it: deleting a running launcher's files breaks it.
-play=dist/bbport-windows
+play=dist/Slopborne-Windows
 running=$(powershell -NoProfile -Command \
     "@(Get-Process | Where-Object { \$_.Path -like '$(cygpath -w "$PWD/$play")\\*' }).Count" | tr -d '\r')
 if [[ ${running:-0} != 0 ]]; then
-    echo "dist/bbport-windows is in use ($running processes): not refreshed; the zip is ready." >&2
+    echo "dist/Slopborne-Windows is in use ($running processes): not refreshed; the zip is ready." >&2
 else
     mkdir -p "$play"
     find "$play" -mindepth 1 -maxdepth 1 ! -name user ! -name mods ! -name bbport.ini \
         ! -name mods.json ! -name patches.json -exec rm -rf {} +
     cp -r "$dest/." "$play/"
 fi
-du -sh "$dest" dist/bbport-windows.zip
+du -sh "$dest" dist/Slopborne-Windows.zip

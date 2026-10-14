@@ -17,7 +17,7 @@ Requirements
 
 First start
 -----------
-1. Move Bloodborne.app to your Applications folder (or anywhere you like).
+1. Move Slopborne.app to your Applications folder (or anywhere you like).
 2. Double-click it. The app is signed and notarized: macOS only asks once whether to open
    an app downloaded from the internet. Click Open.
 3. Choose your Bloodborne game folder (the one that contains eboot.bin). The app remembers it.
@@ -69,10 +69,10 @@ Everything the app writes is in ~/Library/Application Support/Bloodborne
 - config.json    the game folder (delete this file to choose another folder)
 
 Importing a save: drag a save folder (SPRJ0005, from shadPS4 or a decrypted PS4 save) onto
-Bloodborne.app. Your current saves are backed up first.
+Slopborne.app. Your current saves are backed up first.
 
 When something goes wrong
 -------------------------
 If the game closes unexpectedly, the app offers to put a crash report on your Desktop: attach
 it to your bug report together with your Mac model.
-Uninstall: delete Bloodborne.app and the folder ~/Library/Application Support/Bloodborne.
+Uninstall: delete Slopborne.app and the folder ~/Library/Application Support/Bloodborne.

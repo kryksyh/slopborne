@@ -754,9 +754,9 @@ void Menu() {
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     bool keep_open = true;
 #ifdef __APPLE__
-    const char* title = T("Bloodborne settings  (Cmd+, / L3+R3)");
+    const char* title = T("Slopborne settings  (Cmd+, / L3+R3)");
 #else
-    const char* title = T("Bloodborne settings  (Insert / L3+R3)");
+    const char* title = T("Slopborne settings  (Insert / L3+R3)");
 #endif
     if (!ImGui::Begin(title, &keep_open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
         ImGui::End();

@@ -58,7 +58,7 @@ Original features of the [Bloodborne for Windows](https://github.com/Supermedo/b
 - **Mods and third-party patches**, loaded without changing your game files.
 - **DLC** from your own dump (The Old Hunters on base-game dumps), with a DLC folder setting.
 - **Add to Steam** puts the game in your Steam library in one click.
-- **`Play Bloodborne.exe`** starts the game straight away with your saved settings (good for a
+- **`Play Slopborne.exe`** starts the game straight away with your saved settings (good for a
   desktop shortcut).
 - **Controller and keyboard**, an in-game settings menu (Insert or L3+R3), name entry on
   screen, a desktop shortcut, and a button to clear the shader cache.
@@ -108,13 +108,13 @@ Nothing else to install: everything the game needs is in the zip.
 On Windows:
 1. Download the zip from [Releases](https://github.com/kryksyh/slopborne/releases/latest)
    and unpack it anywhere.
-2. Start `Bloodborne.exe`.
+2. Start `Slopborne.exe`.
 3. On **Game & effects**, choose your game folder (the one with `eboot.bin`).
 4. Press **PLAY**.
 
 On macOS:
 
-unpack the zip, open `Bloodborne.app` and choose your game folder (the one with
+unpack the zip, open `Slopborne.app` and choose your game folder (the one with
 `eboot.bin`) when it asks. All settings are in the in-game menu.
 
 **The app is signed and notarized by Apple**: macOS only asks once whether to open an app downloaded from the internet.
